@@ -17,6 +17,8 @@ typedef enum {
 /* --- API --- */
 
 void BSP_I2C_Init(void);
+uint32_t BSP_I2C_GetLastError(void);
+void BSP_I2C_ClearLastError(void);
 
 /* === Blocking API (Initialization / Low Speed) === */
 
