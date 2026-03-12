@@ -92,7 +92,7 @@ void HAL_I2C_MspInit(I2C_HandleTypeDef* i2cHandle)
     hdma_i2c1_tx.Init.PeriphDataAlignment = DMA_PDATAALIGN_BYTE;
     hdma_i2c1_tx.Init.MemDataAlignment = DMA_MDATAALIGN_BYTE;
     hdma_i2c1_tx.Init.Mode = DMA_NORMAL;
-    hdma_i2c1_tx.Init.Priority = DMA_PRIORITY_LOW;
+    hdma_i2c1_tx.Init.Priority = DMA_PRIORITY_MEDIUM;
     if (HAL_DMA_Init(&hdma_i2c1_tx) != HAL_OK)
     {
       Error_Handler();
@@ -108,7 +108,7 @@ void HAL_I2C_MspInit(I2C_HandleTypeDef* i2cHandle)
     hdma_i2c1_rx.Init.PeriphDataAlignment = DMA_PDATAALIGN_BYTE;
     hdma_i2c1_rx.Init.MemDataAlignment = DMA_MDATAALIGN_BYTE;
     hdma_i2c1_rx.Init.Mode = DMA_NORMAL;
-    hdma_i2c1_rx.Init.Priority = DMA_PRIORITY_LOW;
+    hdma_i2c1_rx.Init.Priority = DMA_PRIORITY_MEDIUM;
     if (HAL_DMA_Init(&hdma_i2c1_rx) != HAL_OK)
     {
       Error_Handler();
@@ -116,10 +116,16 @@ void HAL_I2C_MspInit(I2C_HandleTypeDef* i2cHandle)
 
     __HAL_LINKDMA(i2cHandle,hdmarx,hdma_i2c1_rx);
 
+    /* DMA interrupt init */
+    HAL_NVIC_SetPriority(DMA1_Channel6_IRQn, 6, 0);
+    HAL_NVIC_EnableIRQ(DMA1_Channel6_IRQn);
+    HAL_NVIC_SetPriority(DMA1_Channel7_IRQn, 6, 0);
+    HAL_NVIC_EnableIRQ(DMA1_Channel7_IRQn);
+
     /* I2C1 interrupt Init */
-    HAL_NVIC_SetPriority(I2C1_EV_IRQn, 5, 0);
+    HAL_NVIC_SetPriority(I2C1_EV_IRQn, 6, 0);
     HAL_NVIC_EnableIRQ(I2C1_EV_IRQn);
-    HAL_NVIC_SetPriority(I2C1_ER_IRQn, 5, 0);
+    HAL_NVIC_SetPriority(I2C1_ER_IRQn, 6, 0);
     HAL_NVIC_EnableIRQ(I2C1_ER_IRQn);
   /* USER CODE BEGIN I2C1_MspInit 1 */
 
