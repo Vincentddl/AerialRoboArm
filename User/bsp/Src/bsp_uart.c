@@ -52,6 +52,8 @@ static uint16_t GetDmaHead(BspUart_Dev_t dev) {
 
 void BSP_UART_Init(void)
 {
+    HAL_StatusTypeDef debug_dma_status;
+    HAL_StatusTypeDef elrs_dma_status;
     // 1. 绑定硬件句柄
     uart_ctx[BSP_UART_DEBUG].huart = &huart3;
     uart_ctx[BSP_UART_ELRS].huart  = &huart1;
@@ -63,8 +65,12 @@ void BSP_UART_Init(void)
     }
 
     // 2. 启动 DMA 接收 (Circular)
-    HAL_UART_Receive_DMA(uart_ctx[BSP_UART_DEBUG].huart, uart_ctx[BSP_UART_DEBUG].rx_buffer, UART_RX_BUF_SIZE);
-    HAL_UART_Receive_DMA(uart_ctx[BSP_UART_ELRS].huart,  uart_ctx[BSP_UART_ELRS].rx_buffer,  UART_RX_BUF_SIZE);
+    debug_dma_status = HAL_UART_Receive_DMA(uart_ctx[BSP_UART_DEBUG].huart,
+                                            uart_ctx[BSP_UART_DEBUG].rx_buffer,
+                                            UART_RX_BUF_SIZE);
+    elrs_dma_status = HAL_UART_Receive_DMA(uart_ctx[BSP_UART_ELRS].huart,
+                                           uart_ctx[BSP_UART_ELRS].rx_buffer,
+                                           UART_RX_BUF_SIZE);
 
     // 3. 创建二值信号量 (供 Printf 使用)
     tx_sem = xSemaphoreCreateBinary();
@@ -73,6 +79,8 @@ void BSP_UART_Init(void)
     if (tx_sem != NULL) {
         xSemaphoreGive(tx_sem);
     }
+
+    BSP_UART_Printf("[UART] RX DMA DEBUG=%d ELRS=%d\r\n", debug_dma_status, elrs_dma_status);
 }
 
 void BSP_UART_Printf(const char *format, ...)
@@ -177,6 +185,20 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
             BaseType_t xHigherPriorityTaskWoken = pdFALSE;
             xSemaphoreGiveFromISR(tx_sem, &xHigherPriorityTaskWoken);
             portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+        }
+    }
+}
+
+// 3. UART 错误恢复 — 清除 overrun 等错误并重启 DMA，防止接收永久停止
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+    for (int i = 0; i < BSP_UART_NUM; i++) {
+        if (huart == uart_ctx[i].huart) {
+            __HAL_UART_CLEAR_OREFLAG(huart);
+            // DMA 重启后 head 归零，tail 必须同步归零，否则环形缓冲区会读出整个旧缓冲区的脏数据
+            uart_ctx[i].rx_tail_pos = 0;
+            HAL_UART_Receive_DMA(huart, uart_ctx[i].rx_buffer, UART_RX_BUF_SIZE);
+            break;
         }
     }
 }

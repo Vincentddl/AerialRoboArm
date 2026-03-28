@@ -17,6 +17,8 @@
 /* --- Configuration --- */
 #define CONSOLE_BUF_SIZE 64
 #define TEST_MOTOR_DUTY  300    // Safe open-loop testing duty cycle
+#define CONSOLE_INPUT_GUARD_MS 500U
+#define CONSOLE_CMD_BUF_SIZE 8U
 
 /* --- Global Instances --- */
 static DrvElrs_Context_t       elrs_ctx;
@@ -25,6 +27,8 @@ static DrvBldc_Context_t       bldc_ctx;
 
 static uint8_t rx_buffer[CONSOLE_BUF_SIZE];
 static bool    is_init = false;
+static char    cmd_buffer[CONSOLE_CMD_BUF_SIZE];
+static uint8_t cmd_len = 0;
 
 /* --- Control Mode --- */
 typedef enum {
@@ -37,16 +41,22 @@ typedef enum {
 
 static TestRcMode_e current_mode = MODE_IDLE;
 static RcControlData_t current_intent;
+static uint32_t console_input_enable_tick = 0;
 
 /* --- Prototypes --- */
 static void PrintMenu(void);
 static void ExecuteCommand(char cmd);
 static void GenerateDefaultChannels(uint16_t *chs);
+static bool IsValidCommand(char cmd);
+static void PrintRxDebug(const uint8_t *buf, uint16_t len);
+static void ProcessConsoleByte(char ch);
 
 /* ==========================================
  * Init
  * ========================================== */
 void TestRcConsole_Init(void) {
+    uint8_t flush_buf[CONSOLE_BUF_SIZE];
+
     BSP_UART_Printf("\r\n=== ARA PLATFORM: RC INTEGRATION TEST ===\r\n");
 
     /* 1. Init DataHub */
@@ -64,6 +74,13 @@ void TestRcConsole_Init(void) {
     DrvBldc_Init(&bldc_ctx, BSP_GPIO_MOTOR_EN);
     DrvBldc_Enable(&bldc_ctx, false);
 
+    /* 5. Flush any startup garbage lingering in the DEBUG UART DMA buffer */
+    while (BSP_UART_Read(BSP_UART_DEBUG, flush_buf, CONSOLE_BUF_SIZE) > 0) {
+    }
+
+    /* Ignore any serial noise during the first 500ms after boot */
+    console_input_enable_tick = (uint32_t)xTaskGetTickCount() + CONSOLE_INPUT_GUARD_MS;
+
     is_init = true;
     PrintMenu();
 }
@@ -75,13 +92,20 @@ void TestRcConsole_TaskLoop(void) {
     if (!is_init) return;
 
     /* 1. Handle UART Commands */
+    uint32_t now_ms = (uint32_t)xTaskGetTickCount();
     uint16_t len = BSP_UART_Read(BSP_UART_DEBUG, rx_buffer, CONSOLE_BUF_SIZE);
     if (len > 0) {
-        for (uint16_t i = 0; i < len; i++) ExecuteCommand((char)rx_buffer[i]);
+        PrintRxDebug(rx_buffer, len);
+
+        if (now_ms >= console_input_enable_tick) {
+            for (uint16_t i = 0; i < len; i++) {
+                char cmd = (char)rx_buffer[i];
+                ProcessConsoleByte(cmd);
+            }
+        }
     }
 
     /* 2. Update L2 Hardware Driver (Process UART RingBuffer) */
-    uint32_t now_ms = (uint32_t)xTaskGetTickCount();
     DrvElrs_Update(&elrs_ctx, now_ms);
     bool is_link_up = DrvElrs_IsLinkUp(&elrs_ctx);
 
@@ -220,6 +244,78 @@ static void ExecuteCommand(char cmd) {
         case 'h': PrintMenu(); break;
         default: break;
     }
+}
+
+static bool IsValidCommand(char cmd) {
+    switch (cmd) {
+        case 'r':
+        case 's':
+        case 'd':
+        case 'm':
+        case 'i':
+        case 'h':
+            return true;
+        default:
+            return false;
+    }
+}
+
+static void ProcessConsoleByte(char ch) {
+    if (ch == '\r' || ch == '\n') {
+        if (cmd_len == 1U && IsValidCommand(cmd_buffer[0])) {
+            ExecuteCommand(cmd_buffer[0]);
+        }
+        cmd_len = 0;
+        return;
+    }
+
+    if (ch == ' ' || ch == '\t') {
+        return;
+    }
+
+    /* Discard non-printable / non-ASCII bytes (e.g. UART line noise) */
+    if ((uint8_t)ch < 0x20U || (uint8_t)ch > 0x7EU) {
+        return;
+    }
+
+    /* Direct single-key execution (for terminals without line terminator) */
+    if (cmd_len == 0 && IsValidCommand(ch)) {
+        ExecuteCommand(ch);
+        return;
+    }
+
+    if (cmd_len < (CONSOLE_CMD_BUF_SIZE - 1U)) {
+        cmd_buffer[cmd_len++] = ch;
+        cmd_buffer[cmd_len] = '\0';
+    } else {
+        cmd_len = 0;
+    }
+}
+
+static void PrintRxDebug(const uint8_t *buf, uint16_t len) {
+    static uint32_t rx_packet_count = 0;
+    uint16_t print_len = (len > 16U) ? 16U : len;
+
+    BSP_UART_Printf("[RXDBG] pkt=%lu len=%u :", (unsigned long)(++rx_packet_count), len);
+    for (uint16_t i = 0; i < print_len; i++) {
+        BSP_UART_Printf(" %02X", buf[i]);
+    }
+    if (len > print_len) {
+        BSP_UART_Printf(" ...");
+    }
+    BSP_UART_Printf(" |");
+    for (uint16_t i = 0; i < print_len; i++) {
+        char ch = (char)buf[i];
+        if (ch >= 32 && ch <= 126) {
+            BSP_UART_Printf("%c", ch);
+        } else {
+            BSP_UART_Printf(".");
+        }
+    }
+    if (len > print_len) {
+        BSP_UART_Printf("...");
+    }
+    BSP_UART_Printf("|\r\n");
 }
 
 static void GenerateDefaultChannels(uint16_t *chs) {
