@@ -164,7 +164,7 @@ typedef struct {
 #define TB_MOTOR_PID_ERR_FULL_SCALE_EXT     (1024)
 #define TB_MOTOR_CLOSED_LOOP_UQ_LIMIT_Q15   (12000)
 #define TB_MOTOR_PID_POS_KP_Q8_8            (384)
-#define TB_MOTOR_PID_POS_KI_Q8_8            (3)
+#define TB_MOTOR_PID_POS_KI_Q8_8            (1)
 #define TB_MOTOR_PID_POS_KD_Q8_8            (0)
 #define TB_MOTOR_PID_INT_MAX                (2560000)
 #define TB_MOTOR_CLOSED_LOOP_TARGET_STEP    (32)
@@ -564,7 +564,10 @@ static void Testbench_EnterSlot(TestbenchSlot_t new_slot)
         return;
     }
 
-    if (new_slot == TESTBENCH_SLOT_MOTOR_OPEN) {
+    if (new_slot == TESTBENCH_SLOT_MOTOR_ALIGN) {
+        cmd.cmd = TB_MOTOR_CMD_ALIGN;
+        Testbench_WriteMotorCmd(&cmd);
+    } else if (new_slot == TESTBENCH_SLOT_MOTOR_OPEN) {
         cmd.cmd = TB_MOTOR_CMD_IDLE;
         cmd.open_loop_speed_raw_per_tick = 0;
         Testbench_WriteMotorCmd(&cmd);
@@ -937,14 +940,13 @@ static void TbMotor_InitBench(TbMotorBenchContext_t *p_ctx)
     DrvBldc_Init(&p_ctx->motor_driver, BSP_GPIO_MOTOR_EN);
     AlgFoc_Init(&p_ctx->foc_algo, TB_MOTOR_POLE_PAIRS, BSP_PWM_MAX_DUTY);
 
-    // 直接注入硬件标定零位！
-    AlgFoc_SetZeroOffset(&p_ctx->foc_algo, TB_MOTOR_HARDCODED_ZERO_OFFSET);
+    // 不注入硬编码零点，等待运行时执行真实对齐（进入 1 自动触发，也可按 a 重试）
 
     // 【保留之前的修复】：因为编码器与电机相序物理方向相反，必须设为 -1
     p_ctx->foc_algo.motor_direction = -1;
 
-    // 欺骗状态机，告诉它系统已经对齐，跳过安全拦截
-    p_ctx->aligned = true;
+    // 初始化为未对齐，禁止闭环/开环在真实对齐前运行
+    p_ctx->aligned = false;
 
     AlgPid_Init(&p_ctx->pos_pid);
     AlgPid_SetGains(&p_ctx->pos_pid,
@@ -1122,7 +1124,7 @@ static void TbMotor_UpdateBench(TbMotorBenchContext_t *p_ctx,
                 DrvBldc_Enable(&p_ctx->motor_driver, true);
 
                 /* --- 【保留修复】：去掉负号，使用正常的级联输出 --- */
-                AlgFoc_Run(&p_ctx->foc_algo, current_raw, torque_uq, 0);
+                AlgFoc_Run(&p_ctx->foc_algo, current_raw, -torque_uq, 0);
                 /* ------------------------------------------------- */
 
                 apply_status = TbMotor_ApplyFocOutputs(p_ctx);
