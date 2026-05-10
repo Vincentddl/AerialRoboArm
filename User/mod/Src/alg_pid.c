@@ -67,6 +67,14 @@ void AlgPid_Reset(AlgPid_Context_t *ctx)
 
 int16_t AlgPid_Compute(AlgPid_Context_t *ctx, int16_t target, int16_t measured)
 {
+    return AlgPid_ComputeConditional(ctx, target, measured, true);
+}
+
+int16_t AlgPid_ComputeConditional(AlgPid_Context_t *ctx,
+                                  int16_t target,
+                                  int16_t measured,
+                                  bool enable_integral)
+{
     if (ctx == NULL) return 0;
 
     /* 1. Calculate Error (Q15) */
@@ -80,23 +88,33 @@ int16_t AlgPid_Compute(AlgPid_Context_t *ctx, int16_t target, int16_t measured)
     // Operation: Result >> 8
     int32_t p_term = (error * (int32_t)ctx->Kp) >> GAIN_SCALE_SHIFT;
 
-    /* 3. Integral Term */
-    // Logic: Accumulate (Error * Ki) directly into Q23 accumulator.
-    // This provides higher resolution for the integrator.
-    int32_t i_step = (error * (int32_t)ctx->Ki); // Q23
-
-    ctx->integral_sum += i_step;
-
-    // Anti-Windup: Clamp Accumulator
-    ctx->integral_sum = clamp_i32(ctx->integral_sum, ctx->int_max);
-
-    // Convert Accumulator (Q23) to Output (Q15)
-    int32_t i_term = ctx->integral_sum >> GAIN_SCALE_SHIFT;
-
     /* 4. Derivative Term */
     // Logic: (dError_Q15 * Kd_Q8.8) >> 8
     int32_t d_error = error - (int32_t)ctx->prev_error;
     int32_t d_term = (d_error * (int32_t)ctx->Kd) >> GAIN_SCALE_SHIFT;
+
+    /* 3. Integral Term */
+    // Only integrate in the linear region, or while the error is actively
+    // pulling the saturated controller output back toward center.
+    int32_t integral_prev = ctx->integral_sum;
+    int32_t i_term = integral_prev >> GAIN_SCALE_SHIFT;
+
+    if (enable_integral && (ctx->Ki != 0)) {
+        int32_t i_step = (error * (int32_t)ctx->Ki); // Q23
+        int32_t integral_candidate = clamp_i32(integral_prev + i_step, ctx->int_max);
+        int32_t i_term_candidate = integral_candidate >> GAIN_SCALE_SHIFT;
+        int32_t out_candidate = p_term + i_term_candidate + d_term;
+        int32_t out_prev = p_term + i_term + d_term;
+        bool would_saturate = (out_candidate > ctx->out_max) || (out_candidate < -ctx->out_max);
+        bool recovering_from_saturation =
+                ((out_prev >= ctx->out_max) && (error < 0)) ||
+                ((out_prev <= -ctx->out_max) && (error > 0));
+
+        if (!would_saturate || recovering_from_saturation) {
+            ctx->integral_sum = integral_candidate;
+            i_term = i_term_candidate;
+        }
+    }
 
     // Save state
     // Clamp prev_error to int16 range just in case, though error shouldn't exceed it normally

@@ -55,7 +55,7 @@
 /**
  * @brief Position-loop integral gain in Q8.8 format.
  */
-#define MOTION_PID_POS_KI_Q8_8               (0)
+#define MOTION_PID_POS_KI_Q8_8               (1)
 
 /**
  * @brief Position-loop derivative gain in Q8.8 format.
@@ -65,7 +65,7 @@
 /**
  * @brief Maximum integral accumulator magnitude for the position PID.
  */
-#define MOTION_PID_INT_MAX                   (131072L)
+#define MOTION_PID_INT_MAX                   (1024000L)
 
 /**
  * @brief ext_raw error threshold considered "target reached".
@@ -264,7 +264,7 @@ static void Motion_RunClosedLoopToExt(int32_t target_ext_raw,
     torque_uq = Motion_RunPositionController(pos_error_ext_raw);
 
     DrvBldc_Enable(&s_motion_ctx.motor_driver, true);
-    AlgFoc_Run(&s_motion_ctx.foc_algo, current_raw, torque_uq, 0);
+    AlgFoc_Run(&s_motion_ctx.foc_algo, current_raw, -torque_uq, 0);
     apply_status = Motion_ApplyFocOutputs();
 
     if (apply_status != ARA_OK) {
@@ -332,6 +332,7 @@ void TaskMotion_Init(void)
 
     s_motion_ctx.hw_status = ARA_OK;
     s_motion_ctx.prev_angle_raw = 0U;
+    s_motion_ctx.continuous_ext_raw = 0;
 
     init_status = DrvAS5600_Init(&s_motion_ctx.enc_driver, BSP_I2C_MOTION, NULL);
     if (init_status != ARA_OK) {
@@ -344,6 +345,7 @@ void TaskMotion_Init(void)
     DrvBldc_Init(&s_motion_ctx.motor_driver, BSP_GPIO_MOTOR_EN);
 
     AlgFoc_Init(&s_motion_ctx.foc_algo, MOTION_MOTOR_POLE_PAIRS, BSP_PWM_MAX_DUTY);
+    s_motion_ctx.foc_algo.motor_direction = -1;
 
     AlgPid_Init(&s_motion_ctx.pos_pid);
     AlgPid_SetGains(&s_motion_ctx.pos_pid,
@@ -379,8 +381,14 @@ void TaskMotion_Update(const MotionCmd_t *p_cmd, MotionState_t *p_state)
     s_motion_ctx.state_ticks++;
 
     current_raw = DrvAS5600_GetRawAngle(&s_motion_ctx.enc_driver);
-    current_vel = Motion_CalcVelocity(current_raw, s_motion_ctx.prev_angle_raw);
-    current_ext_raw = TaskMotion_MapRawToExt(current_raw);
+    if (s_motion_ctx.uptime_ticks == 1U) {
+        current_vel = 0;
+        s_motion_ctx.continuous_ext_raw = TaskMotion_MapRawToExt(current_raw);
+    } else {
+        current_vel = Motion_CalcVelocity(current_raw, s_motion_ctx.prev_angle_raw);
+        s_motion_ctx.continuous_ext_raw += current_vel;
+    }
+    current_ext_raw = s_motion_ctx.continuous_ext_raw;
     s_motion_ctx.prev_angle_raw = current_raw;
 
     trigger_status = DrvAS5600_TriggerUpdate(&s_motion_ctx.enc_driver);

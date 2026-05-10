@@ -130,6 +130,7 @@ typedef struct {
     /* ---------------- Observability / Health ---------------- */
     AraStatus_t        hw_status;             /**< Latest hardware/control status. */
     uint16_t           prev_angle_raw;        /**< Previous raw angle sample for velocity estimation. */
+    int32_t            continuous_ext_raw;    /**< Unwrapped continuous position accumulator. */
 
     /* ---------------- Aggregated Components ---------------- */
     DrvAS5600_Context_t enc_driver;           /**< L2 encoder driver instance. */

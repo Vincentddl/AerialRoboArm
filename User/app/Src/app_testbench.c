@@ -126,6 +126,7 @@ typedef struct {
     uint16_t           foc_zero_offset;
     uint16_t           prev_raw_angle;
     int32_t            open_loop_phase_raw;
+    int32_t            last_target_ext_raw;
     int32_t            last_error_ext;
     int16_t            last_pid_out_uq;
     AraStatus_t        status;
@@ -162,13 +163,15 @@ typedef struct {
 #define TB_MOTOR_HARDCODED_ZERO_OFFSET      (887U)
 
 #define TB_MOTOR_PID_ERR_FULL_SCALE_EXT     (1024)
-#define TB_MOTOR_CLOSED_LOOP_UQ_LIMIT_Q15   (12000)
+#define TB_MOTOR_CLOSED_LOOP_UQ_LIMIT_Q15   (20000)
 #define TB_MOTOR_PID_POS_KP_Q8_8            (384)
 #define TB_MOTOR_PID_POS_KI_Q8_8            (1)
 #define TB_MOTOR_PID_POS_KD_Q8_8            (0)
-#define TB_MOTOR_PID_INT_MAX                (2560000)
+#define TB_MOTOR_PID_INT_MAX                (512000)
+#define TB_MOTOR_PID_INT_ENABLE_EXT_RAW     (96)
 #define TB_MOTOR_CLOSED_LOOP_TARGET_STEP    (32)
 #define TB_MOTOR_TARGET_REACHED_THD_EXT     (12)
+#define TB_MOTOR_VEL_DAMP_GAIN_Q0           (160)
 
 /* ============================================================================
  * 4. Static Shared Objects
@@ -307,6 +310,19 @@ static int16_t Testbench_ExtErrorToQ15(int32_t error_ext_raw)
     }
 
     return (int16_t)scaled;
+}
+
+static int16_t Testbench_ClampClosedLoopUq(int32_t uq_q15)
+{
+    if (uq_q15 > TB_MOTOR_CLOSED_LOOP_UQ_LIMIT_Q15) {
+        return TB_MOTOR_CLOSED_LOOP_UQ_LIMIT_Q15;
+    }
+
+    if (uq_q15 < (-TB_MOTOR_CLOSED_LOOP_UQ_LIMIT_Q15)) {
+        return (int16_t)(-TB_MOTOR_CLOSED_LOOP_UQ_LIMIT_Q15);
+    }
+
+    return (int16_t)uq_q15;
 }
 
 /* ============================================================================
@@ -903,6 +919,10 @@ static void TbMotor_StopPowerStage(TbMotorBenchContext_t *p_ctx)
 {
     BSP_PWM_StopAll();
     DrvBldc_Enable(&p_ctx->motor_driver, false);
+    AlgPid_Reset(&p_ctx->pos_pid);
+    p_ctx->last_target_ext_raw = 0;
+    p_ctx->last_error_ext = 0;
+    p_ctx->last_pid_out_uq = 0;
 }
 
 static AraStatus_t TbMotor_ApplyFocOutputs(TbMotorBenchContext_t *p_ctx)
@@ -913,12 +933,23 @@ static AraStatus_t TbMotor_ApplyFocOutputs(TbMotorBenchContext_t *p_ctx)
                              p_ctx->foc_algo.duty_c);
 }
 
-static int16_t TbMotor_RunPositionController(TbMotorBenchContext_t *p_ctx, int32_t pos_error_ext)
+static int16_t TbMotor_RunPositionController(TbMotorBenchContext_t *p_ctx,
+                                             int32_t pos_error_ext,
+                                             int16_t current_vel)
 {
     int16_t error_q15;
+    int16_t pid_uq;
+    int32_t damp_uq;
+    bool enable_integral;
 
     error_q15 = Testbench_ExtErrorToQ15(pos_error_ext);
-    return AlgPid_Compute(&p_ctx->pos_pid, error_q15, 0);
+    enable_integral = (Testbench_Abs32(pos_error_ext) <= TB_MOTOR_PID_INT_ENABLE_EXT_RAW);
+    pid_uq = AlgPid_ComputeConditional(&p_ctx->pos_pid, error_q15, 0, enable_integral);
+
+    // Use measured speed directly as damping to avoid derivative kick when the
+    // setpoint changes abruptly.
+    damp_uq = (int32_t)current_vel * TB_MOTOR_VEL_DAMP_GAIN_Q0;
+    return Testbench_ClampClosedLoopUq((int32_t)pid_uq - damp_uq);
 }
 
 static void TbMotor_InitBench(TbMotorBenchContext_t *p_ctx)
@@ -954,7 +985,7 @@ static void TbMotor_InitBench(TbMotorBenchContext_t *p_ctx)
                     TB_MOTOR_PID_POS_KI_Q8_8,
                     TB_MOTOR_PID_POS_KD_Q8_8,
                     TB_MOTOR_CLOSED_LOOP_UQ_LIMIT_Q15,
-                    TB_MOTOR_PID_INT_MAX); // 此时宏应该是 2560000
+                    TB_MOTOR_PID_INT_MAX);
 
     init_status = DrvAS5600_TriggerUpdate(&p_ctx->enc_driver);
     if ((init_status != ARA_OK) && (init_status != ARA_BUSY)) {
@@ -1118,8 +1149,14 @@ static void TbMotor_UpdateBench(TbMotorBenchContext_t *p_ctx,
                 }
 
                 target_ext = Testbench_ClampExtRaw(p_cmd->closed_loop_target_ext_raw);
+                if ((p_ctx->state != TB_MOTOR_STATE_CLOSED_LOOP) ||
+                    (p_ctx->last_target_ext_raw != target_ext))
+                {
+                    AlgPid_Reset(&p_ctx->pos_pid);
+                }
+
                 pos_error_ext = target_ext - current_ext;
-                torque_uq = TbMotor_RunPositionController(p_ctx, pos_error_ext);
+                torque_uq = TbMotor_RunPositionController(p_ctx, pos_error_ext, current_vel);
 
                 DrvBldc_Enable(&p_ctx->motor_driver, true);
 
@@ -1137,6 +1174,7 @@ static void TbMotor_UpdateBench(TbMotorBenchContext_t *p_ctx,
                     p_ctx->state = TB_MOTOR_STATE_CLOSED_LOOP;
                 }
 
+                p_ctx->last_target_ext_raw = target_ext;
                 p_ctx->last_error_ext = pos_error_ext;
                 p_ctx->last_pid_out_uq = torque_uq;
                 break;

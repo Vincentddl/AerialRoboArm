@@ -67,4 +67,16 @@ void AlgPid_Reset(AlgPid_Context_t *ctx);
  */
 int16_t AlgPid_Compute(AlgPid_Context_t *ctx, int16_t target, int16_t measured);
 
+/**
+ * @brief Compute PID output with optional integral separation.
+ * @param target Target value (Q15)
+ * @param measured Current measured value (Q15)
+ * @param enable_integral true to allow integral accumulation for this step
+ * @return Control output (Q15). Saturated to +/- out_max.
+ */
+int16_t AlgPid_ComputeConditional(AlgPid_Context_t *ctx,
+                                  int16_t target,
+                                  int16_t measured,
+                                  bool enable_integral);
+
 #endif // ALG_PID_H
