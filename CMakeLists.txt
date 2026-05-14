@@ -63,6 +63,18 @@ add_definitions(-DDEBUG -DUSE_HAL_DRIVER -DSTM32F103xB)
 
 file(GLOB_RECURSE SOURCES "Core/*.*" "Middlewares/*.*" "Drivers/*.*" "User/*.*")
 
+# ===== demo_v7 Phase 1: exclude legacy BLDC/FOC stack from build =====
+# Files remain in the tree for git history and reference, but are not
+# compiled. Phase 2 will git-rm them after migration is verified.
+list(FILTER SOURCES EXCLUDE REGEX ".*(alg_pid|alg_voltage_foc)\\.(c|h)$")
+list(FILTER SOURCES EXCLUDE REGEX ".*(drv_as5600|drv_bldc_power)\\.(c|h)$")
+list(FILTER SOURCES EXCLUDE REGEX ".*(bsp_i2c)\\.(c|h)$")
+list(FILTER SOURCES EXCLUDE REGEX ".*test_console_drvtest\\.c$")
+list(FILTER SOURCES EXCLUDE REGEX ".*app_threads\\.(c|h)$")
+list(FILTER SOURCES EXCLUDE REGEX ".*app_testbench\\.(c|h)$")
+# Note: tests/ holds PC-side unit tests, never built by the firmware target.
+list(FILTER SOURCES EXCLUDE REGEX ".*tests/.*$")
+
 set(LINKER_SCRIPT ${CMAKE_SOURCE_DIR}/STM32F103C8TX_FLASH.ld)
 
 add_link_options(-Wl,-gc-sections,--print-memory-usage,-Map=${PROJECT_BINARY_DIR}/${PROJECT_NAME}.map)

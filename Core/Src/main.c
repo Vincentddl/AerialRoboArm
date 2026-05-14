@@ -29,10 +29,11 @@
 /* USER CODE BEGIN Includes */
 #include "bsp_uart.h"
 #include "bsp_gpio.h"
-#include "bsp_i2c.h"
 #include "bsp_pwm.h"
-#include "app_threads.h"
-#include "app_testbench.h"
+
+/* demo_v7 app-layer entries */
+#include "app_control.h"
+#include "app_debug.h"
 
 /* USER CODE END Includes */
 
@@ -107,10 +108,14 @@ int main(void)
   /* USER CODE BEGIN 2 */
     BSP_UART_Init(); // 确保串口先初始化，方便打印 Log
     BSP_PWM_Init();
-    BSP_I2C_Init();
 
-//    App_Threads_Init();
-    App_Testbench_Init();
+    /* demo_v7: I2C/AS5600 path removed. ST3215 uses USART2 half-duplex. */
+
+    /* demo_v7: bring up app-layer dependencies before kernel starts. The
+     * actual ControlTask / DebugTask are created from RTOS_THREADS in
+     * freertos.c. */
+    App_Control_InitDeps();
+    App_Debug_InitDeps();
 
   /* USER CODE END 2 */
 

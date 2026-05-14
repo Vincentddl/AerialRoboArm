@@ -30,6 +30,11 @@
 #include "task_motion.h"   // [添加]
 #include "test_rc_console.h"
 #include <math.h> // 用于测试浮点打印
+
+/* demo_v7 app-layer entries */
+#include "app_control.h"
+#include "app_debug.h"
+#include "app_housekeeping.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -99,7 +104,10 @@ void MX_FREERTOS_Init(void) {
   defaultTaskHandle = osThreadNew(StartDefaultTask, NULL, &defaultTask_attributes);
 
   /* USER CODE BEGIN RTOS_THREADS */
-  /* add threads, ... */
+  /* demo_v7: create application threads. defaultTask above continues to run
+   * App_Housekeeping_Step at 1Hz; ControlTask and DebugTask are created here. */
+  App_Control_Init();
+  App_Debug_Init();
   /* USER CODE END RTOS_THREADS */
 
   /* USER CODE BEGIN RTOS_EVENTS */
@@ -118,21 +126,31 @@ void MX_FREERTOS_Init(void) {
 void StartDefaultTask(void *argument)
 {
   /* USER CODE BEGIN StartDefaultTask */
-    // [添加] 直接调用 ARA 的调度器入口
-    // App_Scheduler_Entry 内部有 for(;;) 循环，所以不会返回
-//    App_Scheduler_Entry(argument);
+    (void)argument;
 
-    // 防御性代码，理论上永远不会运行到这里
-  /* Infinite loop */
-  for(;;)
-  {
-      osDelay(1);
-  }
+    /* demo_v7: defaultTask runs the housekeeping janitor at 1Hz.
+     * It feeds IWDG only when ControlTask heartbeat is fresh. */
+    App_Housekeeping_Init();
+
+    for (;;) {
+        App_Housekeeping_Step();
+        osDelay(1000);
+    }
   /* USER CODE END StartDefaultTask */
 }
 
 /* Private application code --------------------------------------------------*/
 /* USER CODE BEGIN Application */
+
+/* Minimal stack-overflow hook. Halts in a visible loop so a debugger
+ * trace shows which task blew its stack. */
+void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
+{
+    (void)xTask;
+    (void)pcTaskName;
+    taskDISABLE_INTERRUPTS();
+    for (;;) { __asm volatile ("nop"); }
+}
 
 /* USER CODE END Application */
 

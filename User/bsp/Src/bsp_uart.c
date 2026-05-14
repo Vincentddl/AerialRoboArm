@@ -15,20 +15,30 @@
 #include "task.h"
 
 /* --- Configuration --- */
-#define UART_RX_BUF_SIZE    (512)   // 必须是2的幂
-#define UART_TX_TIMEOUT_MS  (100)   // 信号量等待超时时间
+#define UART_DEBUG_RX_BUF_SIZE   (128U)
+#define UART_ELRS_RX_BUF_SIZE    (128U)
+#define UART_ST3215_RX_BUF_SIZE  (64U)
+#define UART_TX_TIMEOUT_MS       (100U)
 
 /* --- Hardware Resources --- */
 extern UART_HandleTypeDef huart3;   // DEBUG
-extern UART_HandleTypeDef huart1;   // ELRS (新增)
+extern UART_HandleTypeDef huart1;   // ELRS
+/* USART2 huart declaration is gated: real build will add `extern UART_HandleTypeDef huart2;`
+ * once the ST3215 bus USART is enabled in CubeMX. Until then the HD stub
+ * below works without the symbol. */
 
 /* --- Internal Context --- */
 typedef struct {
     UART_HandleTypeDef *huart;
-    uint8_t             rx_buffer[UART_RX_BUF_SIZE];
+    uint8_t            *rx_buffer;
+    uint16_t            rx_buffer_size;
     volatile uint16_t   rx_tail_pos;
     AraCallback_t       rx_cplt_cb;
 } UartContext_t;
+
+static uint8_t s_debug_rx_buffer[UART_DEBUG_RX_BUF_SIZE];
+static uint8_t s_elrs_rx_buffer[UART_ELRS_RX_BUF_SIZE];
+static uint8_t s_st3215_rx_buffer[UART_ST3215_RX_BUF_SIZE];
 
 /* 多实例上下文数组 */
 static UartContext_t uart_ctx[BSP_UART_NUM];
@@ -39,11 +49,17 @@ static char tx_buf[128];                // 发送缓冲区 (由信号量保护)
 
 /* --- Helper Functions --- */
 static uint16_t GetDmaHead(BspUart_Dev_t dev) {
-    if (dev >= BSP_UART_NUM || !uart_ctx[dev].huart->hdmarx) return 0;
+    if (dev >= BSP_UART_NUM) return 0;
 
-    uint16_t counter = __HAL_DMA_GET_COUNTER(uart_ctx[dev].huart->hdmarx);
-    uint16_t head = UART_RX_BUF_SIZE - counter;
-    if (head >= UART_RX_BUF_SIZE) head = 0;
+    UartContext_t *ctx = &uart_ctx[dev];
+    if (ctx->huart == NULL || ctx->huart->hdmarx == NULL ||
+        ctx->rx_buffer == NULL || ctx->rx_buffer_size == 0U) {
+        return 0;
+    }
+
+    uint16_t counter = __HAL_DMA_GET_COUNTER(ctx->huart->hdmarx);
+    uint16_t head = (uint16_t)(ctx->rx_buffer_size - counter);
+    if (head >= ctx->rx_buffer_size) head = 0;
 
     return head;
 }
@@ -55,6 +71,14 @@ void BSP_UART_Init(void)
     // 1. 绑定硬件句柄
     uart_ctx[BSP_UART_DEBUG].huart = &huart3;
     uart_ctx[BSP_UART_ELRS].huart  = &huart1;
+    uart_ctx[BSP_UART_ST3215].huart = NULL;   /* Stubbed until USART2 is enabled. */
+
+    uart_ctx[BSP_UART_DEBUG].rx_buffer = s_debug_rx_buffer;
+    uart_ctx[BSP_UART_DEBUG].rx_buffer_size = sizeof(s_debug_rx_buffer);
+    uart_ctx[BSP_UART_ELRS].rx_buffer = s_elrs_rx_buffer;
+    uart_ctx[BSP_UART_ELRS].rx_buffer_size = sizeof(s_elrs_rx_buffer);
+    uart_ctx[BSP_UART_ST3215].rx_buffer = s_st3215_rx_buffer;
+    uart_ctx[BSP_UART_ST3215].rx_buffer_size = sizeof(s_st3215_rx_buffer);
 
     // 初始化状态
     for (int i = 0; i < BSP_UART_NUM; i++) {
@@ -63,8 +87,12 @@ void BSP_UART_Init(void)
     }
 
     // 2. 启动 DMA 接收 (Circular)
-    HAL_UART_Receive_DMA(uart_ctx[BSP_UART_DEBUG].huart, uart_ctx[BSP_UART_DEBUG].rx_buffer, UART_RX_BUF_SIZE);
-    HAL_UART_Receive_DMA(uart_ctx[BSP_UART_ELRS].huart,  uart_ctx[BSP_UART_ELRS].rx_buffer,  UART_RX_BUF_SIZE);
+    HAL_UART_Receive_DMA(uart_ctx[BSP_UART_DEBUG].huart,
+                         uart_ctx[BSP_UART_DEBUG].rx_buffer,
+                         uart_ctx[BSP_UART_DEBUG].rx_buffer_size);
+    HAL_UART_Receive_DMA(uart_ctx[BSP_UART_ELRS].huart,
+                         uart_ctx[BSP_UART_ELRS].rx_buffer,
+                         uart_ctx[BSP_UART_ELRS].rx_buffer_size);
 
     // 3. 创建二值信号量 (供 Printf 使用)
     tx_sem = xSemaphoreCreateBinary();
@@ -128,10 +156,11 @@ uint16_t BSP_UART_Read(BspUart_Dev_t dev, uint8_t *p_data, uint16_t len)
     if (dev >= BSP_UART_NUM || p_data == NULL) return 0;
 
     UartContext_t *ctx = &uart_ctx[dev];
+    if (ctx->rx_buffer == NULL || ctx->rx_buffer_size == 0U) return 0;
 
     uint16_t head = GetDmaHead(dev);
     uint16_t tail = ctx->rx_tail_pos;
-    uint16_t bytes_available = (head >= tail) ? (head - tail) : ((UART_RX_BUF_SIZE - tail) + head);
+    uint16_t bytes_available = (head >= tail) ? (head - tail) : ((ctx->rx_buffer_size - tail) + head);
 
     if (bytes_available == 0) return 0;
 
@@ -140,7 +169,7 @@ uint16_t BSP_UART_Read(BspUart_Dev_t dev, uint8_t *p_data, uint16_t len)
 
     while (cnt < read_len) {
         p_data[cnt++] = ctx->rx_buffer[tail++];
-        if (tail >= UART_RX_BUF_SIZE) tail = 0;
+        if (tail >= ctx->rx_buffer_size) tail = 0;
     }
 
     ctx->rx_tail_pos = tail;
@@ -179,4 +208,61 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
             portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
         }
     }
+}
+
+/* =============================================================================
+ * Half-Duplex API (demo_v7 stub)
+ *
+ * This stub implementation allows the full control stack to build and run
+ * without USART2 and without a servo attached. Every Transact immediately
+ * reports kickoff OK; every WaitRx reports TIMEOUT after the full delay.
+ * That in turn drives drv_st3215 into its offline handling, which the
+ * Mock layer in task_motion can intercept and replace with simulated
+ * feedback.
+ *
+ * When USART2 is wired and a servo is connected, replace the Transact /
+ * WaitRx / AbortRx bodies with a real HDSEL + DMA flow without changing
+ * the header contract.
+ * ============================================================================= */
+
+AraStatus_t BSP_UART_HalfDuplex_Transact(BspUart_Dev_t  dev,
+                                         const uint8_t *tx_buf,
+                                         uint16_t       tx_len,
+                                         uint8_t       *rx_buf,
+                                         uint16_t       expect_rx_len)
+{
+    if ((dev >= BSP_UART_NUM) || (tx_buf == NULL) || (rx_buf == NULL) ||
+        (tx_len == 0U) || (expect_rx_len == 0U)) {
+        return ARA_ERR_PARAM;
+    }
+    (void)tx_buf;
+    (void)tx_len;
+    (void)rx_buf;
+    (void)expect_rx_len;
+
+    /* Stub: pretend kickoff is fine; WaitRx will time out. */
+    return ARA_OK;
+}
+
+AraStatus_t BSP_UART_HD_WaitRx(BspUart_Dev_t dev,
+                               uint32_t      timeout_ms,
+                               uint16_t     *out_rx_len)
+{
+    if (dev >= BSP_UART_NUM) {
+        return ARA_ERR_PARAM;
+    }
+    /* Honour the requested delay so timing behaviour mimics the real path. */
+    if (timeout_ms > 0U) {
+        vTaskDelay(pdMS_TO_TICKS(timeout_ms));
+    }
+    if (out_rx_len != NULL) {
+        *out_rx_len = 0U;
+    }
+    return ARA_TIMEOUT;
+}
+
+void BSP_UART_HD_AbortRx(BspUart_Dev_t dev)
+{
+    (void)dev;
+    /* Stub: nothing to abort. */
 }

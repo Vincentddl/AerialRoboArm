@@ -201,13 +201,18 @@ AraStatus_t ModRcSemantic_Process(ModRcSemantic_Context_t *p_ctx,
     /* SF: Aux knob */
     out_data->aux_knob_val = map_analog_permille(channels[MOD_RC_IDX_SF]);
 
+    /* Continuous analog semantics consumed by demo_v7 Arbiter. */
+    ch1_pct = map_ch1_percent((int16_t)channels[MOD_RC_IDX_CH1]);
+    out_data->ch1_percent = ch1_pct;
+    out_data->roll_degree = map_analog_degree(channels[MOD_RC_IDX_CH3]);
+    out_data->gripper_angle = map_analog_degree(channels[MOD_RC_IDX_SF]);
+
     /* ---------------- CH1 arm semantics with hysteresis ---------------- */
     out_data->arm_cmd = ARM_CMD_HOLD;
 
     if ((out_data->req_mode == ARA_MODE_MANUAL) &&
         (out_data->estop_state == ESTOP_RELEASED))
     {
-        ch1_pct = map_ch1_percent((int16_t)channels[MOD_RC_IDX_CH1]);
         abs_pct = (ch1_pct >= 0) ? ch1_pct : (int16_t)(-ch1_pct);
 
         switch (p_ctx->arm_last_cmd) {
