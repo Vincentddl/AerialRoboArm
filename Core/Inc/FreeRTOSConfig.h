@@ -70,6 +70,7 @@
 #define configUSE_16_BIT_TICKS                   0
 #define configUSE_MUTEXES                        1
 #define configQUEUE_REGISTRY_SIZE                8
+#define configCHECK_FOR_STACK_OVERFLOW           2
 #define configUSE_RECURSIVE_MUTEXES              1
 #define configUSE_COUNTING_SEMAPHORES            1
 #define configUSE_PORT_OPTIMISED_TASK_SELECTION  0
@@ -86,11 +87,6 @@
 
 /* The following flag must be enabled only when using newlib */
 #define configUSE_NEWLIB_REENTRANT          1
-
-/* demo_v7: enable runtime stack overflow detection. Pattern 2 performs a
- * sentinel-byte check on every task switch; vApplicationStackOverflowHook
- * (defined in freertos.c USER CODE Application) halts the system when hit. */
-#define configCHECK_FOR_STACK_OVERFLOW      2
 
 /* Set the following definitions to 1 to include the API function, or zero
 to exclude the API function. */

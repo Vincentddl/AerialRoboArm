@@ -73,6 +73,14 @@ void StartDefaultTask(void *argument);
 
 void MX_FREERTOS_Init(void); /* (MISRA C 2004 rule 8.1) */
 
+/* Hook prototypes */
+void vApplicationStackOverflowHook(xTaskHandle xTask, signed char *pcTaskName);
+
+/* USER CODE BEGIN 4 */
+/* CubeMX generated an empty hook stub here; the real implementation lives
+ * in USER CODE Application section below to avoid duplicate definition. */
+/* USER CODE END 4 */
+
 /**
   * @brief  FreeRTOS initialization
   * @param  None
@@ -143,8 +151,10 @@ void StartDefaultTask(void *argument)
 /* USER CODE BEGIN Application */
 
 /* Minimal stack-overflow hook. Halts in a visible loop so a debugger
- * trace shows which task blew its stack. */
-void vApplicationStackOverflowHook(TaskHandle_t xTask, char *pcTaskName)
+ * trace shows which task blew its stack. Signature must match the
+ * prototype above (xTaskHandle / signed char*) so the linker resolves
+ * to a single symbol. */
+void vApplicationStackOverflowHook(xTaskHandle xTask, signed char *pcTaskName)
 {
     (void)xTask;
     (void)pcTaskName;

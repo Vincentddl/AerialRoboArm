@@ -1,6 +1,7 @@
 /**
  * @file bsp_uart.c
  * @brief UART Driver with FreeRTOS Semaphore for DMA Safety (Multi-Instance)
+ *        + Half-Duplex transaction state machine for ST3215 (USART2).
  */
 
 #include "bsp_uart.h"
@@ -20,12 +21,14 @@
 #define UART_ST3215_RX_BUF_SIZE  (64U)
 #define UART_TX_TIMEOUT_MS       (100U)
 
+/* Half-duplex notification bits */
+#define HD_NOTIFY_RX_DONE        (1U << 0)
+#define HD_NOTIFY_RX_ERROR       (1U << 1)
+
 /* --- Hardware Resources --- */
 extern UART_HandleTypeDef huart3;   // DEBUG
 extern UART_HandleTypeDef huart1;   // ELRS
-/* USART2 huart declaration is gated: real build will add `extern UART_HandleTypeDef huart2;`
- * once the ST3215 bus USART is enabled in CubeMX. Until then the HD stub
- * below works without the symbol. */
+extern UART_HandleTypeDef huart2;   // ST3215 half-duplex (single wire)
 
 /* --- Internal Context --- */
 typedef struct {
@@ -46,6 +49,33 @@ static UartContext_t uart_ctx[BSP_UART_NUM];
 /* [IPC Resources - 仅供 DEBUG 发送使用] */
 static SemaphoreHandle_t tx_sem = NULL; // 发送完成信号量
 static char tx_buf[128];                // 发送缓冲区 (由信号量保护)
+
+/* =============================================================================
+ * Half-Duplex transaction state (ST3215 / USART2)
+ *
+ * One outstanding transaction at a time. Three observable states:
+ *   IDLE          - no transaction
+ *   TX_INFLIGHT   - HAL_UART_Transmit_DMA in progress; on TC we kick RX
+ *   RX_INFLIGHT   - HAL_UART_Receive_DMA in progress; on RC/error we notify
+ * The waiting task blocks in HD_WaitRx on a direct-to-task notification.
+ * ============================================================================= */
+
+typedef enum {
+    HD_STATE_IDLE = 0,
+    HD_STATE_TX_INFLIGHT,
+    HD_STATE_RX_INFLIGHT,
+} HdState_t;
+
+typedef struct {
+    volatile HdState_t  state;
+    uint8_t            *rx_buf;
+    uint16_t            expect_rx_len;
+    volatile uint16_t   rx_received_len;
+    TaskHandle_t        waiting_task;
+    volatile uint8_t    last_error;   /* 0 = ok, non-zero = HAL error code */
+} HdCtx_t;
+
+static HdCtx_t s_hd_ctx;
 
 /* --- Helper Functions --- */
 static uint16_t GetDmaHead(BspUart_Dev_t dev) {
@@ -68,25 +98,26 @@ static uint16_t GetDmaHead(BspUart_Dev_t dev) {
 
 void BSP_UART_Init(void)
 {
-    // 1. 绑定硬件句柄
-    uart_ctx[BSP_UART_DEBUG].huart = &huart3;
-    uart_ctx[BSP_UART_ELRS].huart  = &huart1;
-    uart_ctx[BSP_UART_ST3215].huart = NULL;   /* Stubbed until USART2 is enabled. */
+    /* 1. Bind hardware handles. */
+    uart_ctx[BSP_UART_DEBUG].huart  = &huart3;
+    uart_ctx[BSP_UART_ELRS].huart   = &huart1;
+    uart_ctx[BSP_UART_ST3215].huart = &huart2;   /* HD bus, owned by HD state machine */
 
-    uart_ctx[BSP_UART_DEBUG].rx_buffer = s_debug_rx_buffer;
-    uart_ctx[BSP_UART_DEBUG].rx_buffer_size = sizeof(s_debug_rx_buffer);
-    uart_ctx[BSP_UART_ELRS].rx_buffer = s_elrs_rx_buffer;
-    uart_ctx[BSP_UART_ELRS].rx_buffer_size = sizeof(s_elrs_rx_buffer);
-    uart_ctx[BSP_UART_ST3215].rx_buffer = s_st3215_rx_buffer;
+    uart_ctx[BSP_UART_DEBUG].rx_buffer       = s_debug_rx_buffer;
+    uart_ctx[BSP_UART_DEBUG].rx_buffer_size  = sizeof(s_debug_rx_buffer);
+    uart_ctx[BSP_UART_ELRS].rx_buffer        = s_elrs_rx_buffer;
+    uart_ctx[BSP_UART_ELRS].rx_buffer_size   = sizeof(s_elrs_rx_buffer);
+    uart_ctx[BSP_UART_ST3215].rx_buffer      = s_st3215_rx_buffer;
     uart_ctx[BSP_UART_ST3215].rx_buffer_size = sizeof(s_st3215_rx_buffer);
 
-    // 初始化状态
+    /* Initialize per-port software state. */
     for (int i = 0; i < BSP_UART_NUM; i++) {
         uart_ctx[i].rx_tail_pos = 0;
         uart_ctx[i].rx_cplt_cb = NULL;
     }
 
-    // 2. 启动 DMA 接收 (Circular)
+    /* 2. Start Circular DMA RX for DEBUG / ELRS ring buffers.
+     * ST3215 stays disarmed until a HD transaction kicks it. */
     HAL_UART_Receive_DMA(uart_ctx[BSP_UART_DEBUG].huart,
                          uart_ctx[BSP_UART_DEBUG].rx_buffer,
                          uart_ctx[BSP_UART_DEBUG].rx_buffer_size);
@@ -94,13 +125,17 @@ void BSP_UART_Init(void)
                          uart_ctx[BSP_UART_ELRS].rx_buffer,
                          uart_ctx[BSP_UART_ELRS].rx_buffer_size);
 
-    // 3. 创建二值信号量 (供 Printf 使用)
+    /* 3. Create the DEBUG TX semaphore used by BSP_UART_Printf. */
     tx_sem = xSemaphoreCreateBinary();
 
-    // 4. 初始状态必须 Give (允许第一次发送)
+    /* 4. Allow the first DEBUG TX. */
     if (tx_sem != NULL) {
         xSemaphoreGive(tx_sem);
     }
+
+    /* 5. Half-duplex context init. */
+    memset(&s_hd_ctx, 0, sizeof(s_hd_ctx));
+    s_hd_ctx.state = HD_STATE_IDLE;
 }
 
 void BSP_UART_Printf(const char *format, ...)
@@ -158,6 +193,9 @@ uint16_t BSP_UART_Read(BspUart_Dev_t dev, uint8_t *p_data, uint16_t len)
     UartContext_t *ctx = &uart_ctx[dev];
     if (ctx->rx_buffer == NULL || ctx->rx_buffer_size == 0U) return 0;
 
+    /* ST3215 RX is event-driven, not ringbuffer; reject ringbuffer reads on it */
+    if (dev == BSP_UART_ST3215) return 0;
+
     uint16_t head = GetDmaHead(dev);
     uint16_t tail = ctx->rx_tail_pos;
     uint16_t bytes_available = (head >= tail) ? (head - tail) : ((ctx->rx_buffer_size - tail) + head);
@@ -183,46 +221,31 @@ void BSP_UART_SetRxCpltCallback(BspUart_Dev_t dev, AraCallback_t cb)
     }
 }
 
-/* --- ISR Callbacks --- */
-
-// 1. 接收完成 (RingBuffer 通知)
-void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
-{
-    // 遍历查找是哪个外设触发了中断
-    for (int i = 0; i < BSP_UART_NUM; i++) {
-        if (huart == uart_ctx[i].huart && uart_ctx[i].rx_cplt_cb) {
-            uart_ctx[i].rx_cplt_cb();
-            break;
-        }
-    }
-}
-
-// 2. 发送完成 (信号量释放)
-void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
-{
-    // 只有 DEBUG 端口配置了发送信号量
-    if (huart == uart_ctx[BSP_UART_DEBUG].huart) {
-        if (tx_sem != NULL) {
-            BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-            xSemaphoreGiveFromISR(tx_sem, &xHigherPriorityTaskWoken);
-            portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
-        }
-    }
-}
-
 /* =============================================================================
- * Half-Duplex API (demo_v7 stub)
+ * Half-Duplex API: real implementation (demo_v7 phase 2)
  *
- * This stub implementation allows the full control stack to build and run
- * without USART2 and without a servo attached. Every Transact immediately
- * reports kickoff OK; every WaitRx reports TIMEOUT after the full delay.
- * That in turn drives drv_st3215 into its offline handling, which the
- * Mock layer in task_motion can intercept and replace with simulated
- * feedback.
+ * Wire-level sequence per transaction:
+ *   1. HalfDuplex_Transact():
+ *        - capture rx_buf / expect_rx_len / waiting_task
+ *        - state = TX_INFLIGHT
+ *        - HAL_UART_Transmit_DMA(huart2, tx_buf, tx_len)
+ *   2. HAL_UART_TxCpltCallback(huart2):
+ *        - state = RX_INFLIGHT
+ *        - HAL_UART_Receive_DMA(huart2, rx_buf, expect_rx_len)
+ *   3. HAL_UART_RxCpltCallback(huart2):
+ *        - state = IDLE
+ *        - rx_received_len = expect_rx_len
+ *        - xTaskNotifyFromISR(waiting_task, HD_NOTIFY_RX_DONE, ...)
+ *      OR
+ *      HAL_UART_ErrorCallback(huart2):
+ *        - state = IDLE, last_error = code
+ *        - xTaskNotifyFromISR(waiting_task, HD_NOTIFY_RX_ERROR, ...)
+ *   4. HD_WaitRx():
+ *        - xTaskNotifyWait(timeout)
+ *        - return ARA_OK / ARA_ERR_IO / ARA_TIMEOUT
+ *      Caller MUST call HD_AbortRx after a TIMEOUT.
  *
- * When USART2 is wired and a servo is connected, replace the Transact /
- * WaitRx / AbortRx bodies with a real HDSEL + DMA flow without changing
- * the header contract.
+ * Single ST3215 servo, single waiting task: no per-transaction queueing.
  * ============================================================================= */
 
 AraStatus_t BSP_UART_HalfDuplex_Transact(BspUart_Dev_t  dev,
@@ -231,16 +254,46 @@ AraStatus_t BSP_UART_HalfDuplex_Transact(BspUart_Dev_t  dev,
                                          uint8_t       *rx_buf,
                                          uint16_t       expect_rx_len)
 {
-    if ((dev >= BSP_UART_NUM) || (tx_buf == NULL) || (rx_buf == NULL) ||
+    if ((dev != BSP_UART_ST3215) || (tx_buf == NULL) || (rx_buf == NULL) ||
         (tx_len == 0U) || (expect_rx_len == 0U)) {
         return ARA_ERR_PARAM;
     }
-    (void)tx_buf;
-    (void)tx_len;
-    (void)rx_buf;
-    (void)expect_rx_len;
+    if (expect_rx_len > UART_ST3215_RX_BUF_SIZE) {
+        return ARA_ERR_PARAM;
+    }
 
-    /* Stub: pretend kickoff is fine; WaitRx will time out. */
+    UART_HandleTypeDef *huart = uart_ctx[dev].huart;
+    if (huart == NULL) {
+        return ARA_ERR_IO;
+    }
+
+    /* Reject overlapping transactions. Caller is expected to fully consume
+     * (WaitRx + AbortRx if needed) before issuing the next one. */
+    if (s_hd_ctx.state != HD_STATE_IDLE) {
+        return ARA_BUSY;
+    }
+
+    /* Snapshot the transaction context BEFORE starting TX so the TC ISR
+     * has all the info it needs to kick off the RX leg. */
+    s_hd_ctx.rx_buf          = rx_buf;
+    s_hd_ctx.expect_rx_len   = expect_rx_len;
+    s_hd_ctx.rx_received_len = 0U;
+    s_hd_ctx.waiting_task    = xTaskGetCurrentTaskHandle();
+    s_hd_ctx.last_error      = 0U;
+    s_hd_ctx.state           = HD_STATE_TX_INFLIGHT;
+
+    /* Clear any stale notification on the calling task to avoid a previous
+     * aborted transact triggering an immediate spurious wake-up. */
+    (void)ulTaskNotifyValueClear(s_hd_ctx.waiting_task,
+                                 HD_NOTIFY_RX_DONE | HD_NOTIFY_RX_ERROR);
+
+    /* HDSEL: HAL_HalfDuplex_Init already sets USART_CR3_HDSEL. The peripheral
+     * automatically tristates RX while transmitting. We just kick TX DMA. */
+    HAL_StatusTypeDef hr = HAL_UART_Transmit_DMA(huart, (uint8_t *)tx_buf, tx_len);
+    if (hr != HAL_OK) {
+        s_hd_ctx.state = HD_STATE_IDLE;
+        return ARA_ERR_IO;
+    }
     return ARA_OK;
 }
 
@@ -248,21 +301,153 @@ AraStatus_t BSP_UART_HD_WaitRx(BspUart_Dev_t dev,
                                uint32_t      timeout_ms,
                                uint16_t     *out_rx_len)
 {
-    if (dev >= BSP_UART_NUM) {
+    if (dev != BSP_UART_ST3215) {
         return ARA_ERR_PARAM;
-    }
-    /* Honour the requested delay so timing behaviour mimics the real path. */
-    if (timeout_ms > 0U) {
-        vTaskDelay(pdMS_TO_TICKS(timeout_ms));
     }
     if (out_rx_len != NULL) {
         *out_rx_len = 0U;
+    }
+
+    /* Defend against caller pairing without a preceding Transact. */
+    if (s_hd_ctx.state == HD_STATE_IDLE && s_hd_ctx.last_error == 0U &&
+        s_hd_ctx.rx_received_len == 0U) {
+        return ARA_ERR_PARAM;
+    }
+
+    uint32_t notify_bits = 0U;
+    BaseType_t got = xTaskNotifyWait(0U, /* don't clear on entry */
+                                     HD_NOTIFY_RX_DONE | HD_NOTIFY_RX_ERROR,
+                                     &notify_bits,
+                                     pdMS_TO_TICKS(timeout_ms));
+    if (got != pdTRUE) {
+        return ARA_TIMEOUT;
+    }
+    if (notify_bits & HD_NOTIFY_RX_ERROR) {
+        return ARA_ERR_IO;
+    }
+    if (notify_bits & HD_NOTIFY_RX_DONE) {
+        if (out_rx_len != NULL) {
+            *out_rx_len = s_hd_ctx.rx_received_len;
+        }
+        return ARA_OK;
     }
     return ARA_TIMEOUT;
 }
 
 void BSP_UART_HD_AbortRx(BspUart_Dev_t dev)
 {
-    (void)dev;
-    /* Stub: nothing to abort. */
+    if (dev != BSP_UART_ST3215) return;
+    UART_HandleTypeDef *huart = uart_ctx[dev].huart;
+    if (huart == NULL) return;
+
+    /* Stop whichever DMA leg is currently armed. HAL_UART_Abort handles
+     * both TX and RX paths and tears the DMA down cleanly. */
+    (void)HAL_UART_Abort(huart);
+
+    s_hd_ctx.state           = HD_STATE_IDLE;
+    s_hd_ctx.rx_buf          = NULL;
+    s_hd_ctx.expect_rx_len   = 0U;
+    s_hd_ctx.rx_received_len = 0U;
+    s_hd_ctx.waiting_task    = NULL;
+    s_hd_ctx.last_error      = 0U;
+}
+
+/* --- ISR Callbacks --- */
+
+// 1. 接收完成 (RingBuffer 通知 / HD 状态机)
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+    /* ST3215 half-duplex: end of RX leg of a transaction. */
+    if (huart == uart_ctx[BSP_UART_ST3215].huart) {
+        if (s_hd_ctx.state == HD_STATE_RX_INFLIGHT) {
+            s_hd_ctx.rx_received_len = s_hd_ctx.expect_rx_len;
+            s_hd_ctx.state           = HD_STATE_IDLE;
+
+            BaseType_t hpw = pdFALSE;
+            if (s_hd_ctx.waiting_task != NULL) {
+                xTaskNotifyFromISR(s_hd_ctx.waiting_task,
+                                   HD_NOTIFY_RX_DONE,
+                                   eSetBits, &hpw);
+            }
+            portYIELD_FROM_ISR(hpw);
+        }
+        return;
+    }
+
+    /* DEBUG / ELRS: legacy ringbuffer-cplt notification path. */
+    for (int i = 0; i < BSP_UART_NUM; i++) {
+        if (huart == uart_ctx[i].huart && uart_ctx[i].rx_cplt_cb) {
+            uart_ctx[i].rx_cplt_cb();
+            break;
+        }
+    }
+}
+
+// 2. 发送完成 (信号量释放 / HD 状态机切到 RX)
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
+{
+    /* DEBUG: release the printf semaphore. */
+    if (huart == uart_ctx[BSP_UART_DEBUG].huart) {
+        if (tx_sem != NULL) {
+            BaseType_t hpw = pdFALSE;
+            xSemaphoreGiveFromISR(tx_sem, &hpw);
+            portYIELD_FROM_ISR(hpw);
+        }
+        return;
+    }
+
+    /* ST3215 half-duplex: TX leg complete, switch to RX leg. */
+    if (huart == uart_ctx[BSP_UART_ST3215].huart) {
+        if (s_hd_ctx.state == HD_STATE_TX_INFLIGHT) {
+            s_hd_ctx.state = HD_STATE_RX_INFLIGHT;
+            HAL_StatusTypeDef hr = HAL_UART_Receive_DMA(huart,
+                                                       s_hd_ctx.rx_buf,
+                                                       s_hd_ctx.expect_rx_len);
+            if (hr != HAL_OK) {
+                /* Could not arm RX. Notify the waiting task with error. */
+                s_hd_ctx.state      = HD_STATE_IDLE;
+                s_hd_ctx.last_error = (uint8_t)hr;
+                BaseType_t hpw = pdFALSE;
+                if (s_hd_ctx.waiting_task != NULL) {
+                    xTaskNotifyFromISR(s_hd_ctx.waiting_task,
+                                       HD_NOTIFY_RX_ERROR,
+                                       eSetBits, &hpw);
+                }
+                portYIELD_FROM_ISR(hpw);
+            }
+        }
+        return;
+    }
+}
+
+// 3. 错误回调 (HD 状态机)
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+    if (huart == uart_ctx[BSP_UART_ST3215].huart) {
+        if (s_hd_ctx.state != HD_STATE_IDLE) {
+            s_hd_ctx.last_error = (uint8_t)(HAL_UART_GetError(huart) & 0xFFU);
+            s_hd_ctx.state      = HD_STATE_IDLE;
+            BaseType_t hpw = pdFALSE;
+            if (s_hd_ctx.waiting_task != NULL) {
+                xTaskNotifyFromISR(s_hd_ctx.waiting_task,
+                                   HD_NOTIFY_RX_ERROR,
+                                   eSetBits, &hpw);
+            }
+            portYIELD_FROM_ISR(hpw);
+        }
+        return;
+    }
+
+    /* DEBUG: re-give the semaphore so a parity/overrun does not deadlock printf. */
+    if (huart == uart_ctx[BSP_UART_DEBUG].huart) {
+        if (tx_sem != NULL) {
+            BaseType_t hpw = pdFALSE;
+            xSemaphoreGiveFromISR(tx_sem, &hpw);
+            portYIELD_FROM_ISR(hpw);
+        }
+        return;
+    }
+
+    /* DEBUG / ELRS ring buffers: HAL keeps the DMA running on framing errors,
+     * just clear so the next byte arrives. Nothing to do here for now. */
 }
