@@ -63,12 +63,10 @@ add_definitions(-DDEBUG -DUSE_HAL_DRIVER -DSTM32F103xB)
 
 file(GLOB_RECURSE SOURCES "Core/*.*" "Middlewares/*.*" "Drivers/*.*" "User/*.*")
 
-# ===== demo_v7 Phase 1: exclude legacy BLDC/FOC stack from build =====
-# Files remain in the tree for git history and reference, but are not
-# compiled. Phase 2 will git-rm them after migration is verified.
-list(FILTER SOURCES EXCLUDE REGEX ".*(alg_pid|alg_voltage_foc)\\.(c|h)$")
-list(FILTER SOURCES EXCLUDE REGEX ".*(drv_as5600|drv_bldc_power)\\.(c|h)$")
-list(FILTER SOURCES EXCLUDE REGEX ".*(bsp_i2c)\\.(c|h)$")
+# ===== demo_v7 Phase 1: exclude legacy code from build =====
+# A组 (alg_pid / alg_voltage_foc / drv_as5600 / drv_bldc_power / bsp_i2c) 已 git rm，
+# 不需要再 EXCLUDE。下列保留是 Phase 2 才会清理的迁移参考（app_testbench /
+# app_threads / test_console_drvtest）。
 list(FILTER SOURCES EXCLUDE REGEX ".*test_console_drvtest\\.c$")
 list(FILTER SOURCES EXCLUDE REGEX ".*app_threads\\.(c|h)$")
 list(FILTER SOURCES EXCLUDE REGEX ".*app_testbench\\.(c|h)$")
