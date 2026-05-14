@@ -53,4 +53,16 @@ void App_Control_Init(void);
  */
 uint32_t App_Control_GetHeartbeatMs(void);
 
+/**
+ * @brief Snapshot the bring-up force-mode state.
+ * @param  out_angle_deg  When force is active, receives the locked target.
+ *                        Untouched when force is inactive. May be NULL.
+ * @return true when force mode is currently active.
+ *
+ * Used by DebugTask to render force status alongside the periodic snapshot.
+ * Reading is racy with the ControlTask writer but correctness only requires
+ * eventual consistency for an operator-facing readout.
+ */
+bool App_Control_GetForceState(int16_t *out_angle_deg);
+
 #endif /* APP_CONTROL_H */

@@ -48,6 +48,12 @@ static ArbiterOutput_t  s_arb;
 static MotionCmd_t      s_mcmd;
 static MotionState_t    s_mstate;
 
+/* Force-mode bring-up state. When s_force_active is true, step_running
+ * skips Arbiter/Manipulator and drives TaskMotion_Update directly with
+ * s_force_angle_deg. Toggled exclusively via DBG_REQ_FORCE_GOTO_ANGLE. */
+static bool    s_force_active     = false;
+static int16_t s_force_angle_deg  = 0;
+
 /* =============================================================================
  * Helpers
  * ============================================================================= */
@@ -136,10 +142,20 @@ static void handle_debug_request(uint32_t now_ms)
         break;
     case DBG_REQ_SWITCH_MODE:
     case DBG_REQ_SET_ESTOP:
-    case DBG_REQ_FORCE_GOTO_ANGLE:
     case DBG_REQ_CALIBRATE_ZERO:
     default:
         /* Forwarded into Arbiter input injection in a later iteration. */
+        break;
+    case DBG_REQ_FORCE_GOTO_ANGLE:
+        if (req.arg2 < 0) {
+            s_force_active = false;
+        } else {
+            int32_t deg = req.arg1;
+            if (deg < TASK_MOTION_ANGLE_MIN_DEG) deg = TASK_MOTION_ANGLE_MIN_DEG;
+            if (deg > TASK_MOTION_ANGLE_MAX_DEG) deg = TASK_MOTION_ANGLE_MAX_DEG;
+            s_force_angle_deg = (int16_t)deg;
+            s_force_active    = true;
+        }
         break;
     }
 }
@@ -215,7 +231,27 @@ static void step_fault(uint32_t now_ms)
     /* Idle loop. Exits via DBG_REQ_CLEAR_FAULT. */
 }
 
-static void step_running(uint32_t now_ms)
+static void step_running_force(uint32_t now_ms)
+{
+    /* Bypass Arbiter / Manipulator. Drive Motion directly with the
+     * locked target angle. Feedback (read leg) still happens inside
+     * TaskMotion_Update, so DataHub publishes pos/load as usual and
+     * the operator can watch the closed loop converge. */
+    s_mcmd.torque_on        = true;
+    s_mcmd.target_angle_deg = s_force_angle_deg;
+    s_mcmd.target_speed     = TASK_MOTION_DEFAULT_SPEED;
+    s_mcmd.target_acc       = TASK_MOTION_DEFAULT_ACC;
+    s_mcmd.force_keepalive  = false;
+
+    TaskMotion_Update(&s_mcmd, now_ms, &s_mstate);
+
+    /* Keep the RC / Vision artefacts in DataHub fresh for visibility
+     * even though they don't drive anything in force mode. */
+    TaskRc_Update(now_ms, &s_rc);
+    TaskVision_Update(now_ms, &s_vis);
+}
+
+static void step_running_normal(uint32_t now_ms)
 {
     TaskRc_Update(now_ms, &s_rc);
     TaskVision_Update(now_ms, &s_vis);
@@ -233,6 +269,15 @@ static void step_running(uint32_t now_ms)
     TaskManipulator_Update(&s_arb, &s_mstate, now_ms, &s_mcmd);
 
     TaskMotion_Update(&s_mcmd, now_ms, &s_mstate);
+}
+
+static void step_running(uint32_t now_ms)
+{
+    if (s_force_active) {
+        step_running_force(now_ms);
+    } else {
+        step_running_normal(now_ms);
+    }
 }
 
 /* =============================================================================
@@ -308,4 +353,12 @@ void App_Control_Init(void)
 uint32_t App_Control_GetHeartbeatMs(void)
 {
     return s_heartbeat_ms;
+}
+
+bool App_Control_GetForceState(int16_t *out_angle_deg)
+{
+    if ((out_angle_deg != NULL) && s_force_active) {
+        *out_angle_deg = s_force_angle_deg;
+    }
+    return s_force_active;
 }

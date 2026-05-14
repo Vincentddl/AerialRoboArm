@@ -48,8 +48,19 @@ typedef enum {
     /** Clear mock vision target. */
     DBG_REQ_MOCK_VISION_CLEAR,
 
-    /** Manually issue a goto-angle request (used in Manual debug slot).
-     *  arg1 = angle_deg. Bypasses RC, still goes through arbiter. */
+    /** Force-mode bring-up: bypass Arbiter/Manipulator and drive
+     *  TaskMotion_Update directly with a fixed target angle.
+     *
+     *  arg1 (int16_t cast)  = target angle in degrees
+     *  arg2:
+     *      >= 0  enable force mode and lock to arg1
+     *       < 0  disable force mode (servo torque is released next tick)
+     *
+     *  While force mode is active, Arbiter and Manipulator are NOT
+     *  consulted. This is intentional: force mode is a bring-up tool
+     *  for verifying the USART2 / ST3215 / mechanical loop without
+     *  any policy layer in between.
+     */
     DBG_REQ_FORCE_GOTO_ANGLE,
 
     /** Calibrate current servo position as logical zero offset. */
