@@ -84,6 +84,18 @@ typedef struct {
 #define ARBITER_DEFAULT_VISION_STALE_MS   (200U)
 
 /**
+ * @brief Sentinel meaning "this output's target_angle_deg is intentionally
+ *        unset; the consumer must keep its previous target". Currently
+ *        emitted on the AUTO/vision-stale path where the arbiter cannot
+ *        know what the joint should hold at, but does not want to imply
+ *        a real 0-degree command. INT16_MIN is well outside any plausible
+ *        joint range so a debug log of -32768 immediately identifies it.
+ *        Consumers (manipulator FSM) detect this and fall back to their
+ *        own last_target instead of forwarding the value to motion.
+ */
+#define ARBITER_TARGET_ANGLE_HOLD         (INT16_MIN)
+
+/**
  * @brief Pure function. Consumes ArbiterInput, populates ArbiterOutput.
  *        Does not touch any globals.
  */

@@ -185,8 +185,22 @@ static void step_ping(uint32_t now_ms)
 
 static void step_config(uint32_t now_ms)
 {
-    /* Real-servo configuration would go here: MODE=0, MIN=0, MAX=4095,
-     * LOCK, TORQUE_LIMIT. Stubbed for mock path. */
+    /* Servo configuration is currently a no-op pass-through.
+     *
+     * step_ping above has already issued one torque-off WritePos +
+     * ReadFeedback round-trip and confirmed servo_online; that doubles
+     * as a liveness + ID/baud sanity check. Anything beyond that
+     * (MODE / MIN / MAX / TORQUE_LIMIT / LOCK validation) would require:
+     *   - new READ-byte encode/parse helpers in drv_st3215
+     *   - a per-register readback against expected defaults
+     *   - a bring-up policy decision: read-only check, or auto-rewrite
+     *     EEPROM (which has limited write cycles)
+     *
+     * For demo_v7 the policy is: physically inspect / set EEPROM via the
+     * vendor utility once before first power-up. If a future regression
+     * makes this insufficient, escalate this stub to A2 in the bring-up
+     * notes (drv_st3215 read helpers + per-register validation).
+     */
     enter_phase(CTRL_PHASE_SERVO_ENABLE, now_ms);
 }
 

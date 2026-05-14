@@ -74,10 +74,14 @@ void TaskManipulator_Update(const ArbiterOutput_t *arb,
             enter_state(MANIP_STATE_MANUAL, tick_ms);
         }
         out_cmd->torque_on        = arb->torque_request;
-        out_cmd->target_angle_deg = arb->target_angle_deg;
+        if (arb->target_angle_deg != ARBITER_TARGET_ANGLE_HOLD) {
+            out_cmd->target_angle_deg   = arb->target_angle_deg;
+            s_ctx.last_target_angle_deg = arb->target_angle_deg;
+        } else {
+            out_cmd->target_angle_deg   = s_ctx.last_target_angle_deg;
+        }
         out_cmd->target_speed     = arb->target_speed;
         out_cmd->target_acc       = arb->target_acc;
-        s_ctx.last_target_angle_deg = arb->target_angle_deg;
         break;
 
     case ARA_MODE_AUTO:
@@ -85,7 +89,8 @@ void TaskManipulator_Update(const ArbiterOutput_t *arb,
         out_cmd->target_speed = arb->target_speed;
         out_cmd->target_acc   = arb->target_acc;
 
-        if (arb->reason_code == ARB_REASON_AUTO_VISION_FRESH) {
+        if ((arb->reason_code == ARB_REASON_AUTO_VISION_FRESH) &&
+            (arb->target_angle_deg != ARBITER_TARGET_ANGLE_HOLD)) {
             out_cmd->target_angle_deg   = arb->target_angle_deg;
             s_ctx.last_target_angle_deg = arb->target_angle_deg;
             if (mot_state->motion_status == ST3215_MOTION_ARRIVED) {
@@ -98,7 +103,7 @@ void TaskManipulator_Update(const ArbiterOutput_t *arb,
                 }
             }
         } else {
-            /* Stale vision: hold last target */
+            /* Stale vision OR explicit hold sentinel: hold last target. */
             out_cmd->target_angle_deg = s_ctx.last_target_angle_deg;
             if (s_ctx.current_state != MANIP_STATE_AUTO_HOLD) {
                 enter_state(MANIP_STATE_AUTO_HOLD, tick_ms);

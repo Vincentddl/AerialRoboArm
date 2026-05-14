@@ -111,7 +111,7 @@ void TaskArbiter_Decide(const ArbiterInput_t *in, ArbiterOutput_t *out)
         /* Vision stale: park-hold at current position. */
         out->mode             = ARA_MODE_AUTO;
         out->torque_request   = true;
-        out->target_angle_deg = 0; /* caller keeps last target via servo FSM */
+        out->target_angle_deg = ARBITER_TARGET_ANGLE_HOLD;
         out->target_speed     = 0U;
         out->target_acc       = 50U;
         out->gripper_cmd      = GRIPPER_CMD_STOP;
