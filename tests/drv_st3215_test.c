@@ -325,6 +325,18 @@ static void test_classify_overload(void)
     TEST_PASS("classify_overload");
 }
 
+/* Holding a payload against gravity: at target, stationary, but high load.
+ * Must classify as ARRIVED so the upper FSM does not strip torque. */
+static void test_classify_arrived_under_load(void)
+{
+    St3215_Feedback_t fb;
+    memset(&fb, 0, sizeof(fb));
+    fb.position = 2010; fb.speed = 2; fb.load = 900; fb.moving = 0;
+    St3215_MotionStatus_t s = DrvSt3215_ClassifyMotion(&fb, 2000, NULL);
+    ASSERT_EQ_INT(s, ST3215_MOTION_ARRIVED, "classify_arrived_under_load");
+    TEST_PASS("classify_arrived_under_load");
+}
+
 /* =============================================================================
  * Lifecycle / online tests
  * ============================================================================= */
@@ -395,6 +407,7 @@ int main(void)
     test_classify_moving();
     test_classify_stalled();
     test_classify_overload();
+    test_classify_arrived_under_load();
 
     printf("\n[Lifecycle]\n");
     test_lifecycle_online();

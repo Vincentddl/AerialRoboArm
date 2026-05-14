@@ -370,7 +370,18 @@ St3215_MotionStatus_t DrvSt3215_ClassifyMotion(
     const int16_t spd_abs  = (fb->speed < 0) ? (int16_t)-fb->speed : fb->speed;
     const int16_t load_abs = (fb->load  < 0) ? (int16_t)-fb->load  : fb->load;
 
-    /* Overload first: protects hardware */
+    /* ARRIVED takes priority over OVERLOAD when the servo is genuinely
+     * stationary at target. A robotic arm holding a payload against
+     * gravity can sit at the target with load >= load_ovl indefinitely;
+     * classifying that as OVERLOAD would let an upper-layer FSM strip
+     * torque and drop the payload. The strict ARRIVED predicate
+     * (!moving && err < pos_tol && spd_abs < spd_tol) ensures we only
+     * pre-empt OVERLOAD when motion has truly settled at target. */
+    if (!fb->moving && (err < pos_tol) && (spd_abs < spd_tol)) {
+        return ST3215_MOTION_ARRIVED;
+    }
+
+    /* Overload protection: high load AND not at-rest at target. */
     if (load_abs >= load_ovl) {
         if (!fb->moving && (err >= pos_tol)) {
             return ST3215_MOTION_STALLED;
@@ -381,10 +392,7 @@ St3215_MotionStatus_t DrvSt3215_ClassifyMotion(
     if (fb->moving) {
         return ST3215_MOTION_MOVING;
     }
-    /* Stopped */
-    if ((err < pos_tol) && (spd_abs < spd_tol)) {
-        return ST3215_MOTION_ARRIVED;
-    }
+    /* Stopped but not yet at target: stalled. */
     return ST3215_MOTION_STALLED;
 }
 

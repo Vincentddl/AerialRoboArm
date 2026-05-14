@@ -238,10 +238,16 @@ typedef enum {
  */
 typedef enum {
     ST3215_MOTION_UNKNOWN = 0,  /**< No fresh feedback yet. */
-    ST3215_MOTION_ARRIVED,      /**< At target within tolerance, speed near zero. */
+    ST3215_MOTION_ARRIVED,      /**< At target, stationary, speed near zero;
+                                     pre-empts OVERLOAD so a payload-holding
+                                     pose is not mistaken for a fault. */
     ST3215_MOTION_MOVING,       /**< Still traversing. */
-    ST3215_MOTION_STALLED,      /**< Stopped before reaching target with high load. */
-    ST3215_MOTION_OVERLOAD      /**< |load| exceeds overload threshold regardless of position. */
+    ST3215_MOTION_STALLED,      /**< Stopped before reaching target. */
+    ST3215_MOTION_OVERLOAD      /**< |load| exceeds threshold while servo is
+                                     moving or off-target. Indicates "monitor",
+                                     not "must release torque" — the policy of
+                                     stripping torque belongs to the upper
+                                     layer, not the driver. */
 } St3215_MotionStatus_t;
 
 /* =============================================================================

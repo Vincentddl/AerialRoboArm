@@ -48,11 +48,6 @@ static int16_t clamp_angle_deg(int16_t deg)
     return deg;
 }
 
-static int16_t abs_i16(int16_t v)
-{
-    return (v < 0) ? (int16_t)(-v) : v;
-}
-
 /* =============================================================================
  * Public API
  * ============================================================================= */
@@ -301,8 +296,20 @@ void TaskMotion_Update(const MotionCmd_t *cmd,
     int16_t target_steps = (int16_t)ST3215_DEG_TO_STEPS(
         clamp_angle_deg(cmd->target_angle_deg));
 
-    bool changed   = (abs_i16((int16_t)(target_steps - s_last_written_steps))
-                      > TASK_MOTION_DEADBAND_STEPS);
+    /* Compute the deadband delta in int32 to avoid the int16 narrowing
+     * trap: when s_last_written_steps == INT16_MIN (the sentinel before
+     * the first successful write), target_steps - INT16_MIN = 32768,
+     * which is unrepresentable as int16. Truncating that back to int16
+     * silently flips it to INT16_MIN and breaks the very first write
+     * detection. Doing the math in int32 keeps the diff exact, and
+     * abs() on an int32 value is well-defined for everything except
+     * INT32_MIN (which we never reach with int16 inputs). */
+    int32_t target_i32  = (int32_t)target_steps;
+    int32_t last_i32    = (int32_t)s_last_written_steps;
+    int32_t diff_steps  = target_i32 - last_i32;
+    if (diff_steps < 0) diff_steps = -diff_steps;
+
+    bool changed   = (diff_steps > TASK_MOTION_DEADBAND_STEPS);
     bool keepalive = ((tick_ms - s_last_written_ms) > TASK_MOTION_KEEPALIVE_MS);
     bool need_write = cmd->torque_on && (changed || keepalive || cmd->force_keepalive);
     bool write_result_set = false;
