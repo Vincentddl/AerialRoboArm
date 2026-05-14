@@ -20,6 +20,7 @@ static DrvSt3215_Context_t s_st_ctx;
 /* Deadband + keepalive bookkeeping */
 static int16_t  s_last_written_steps   = INT16_MIN;
 static uint32_t s_last_written_ms      = 0U;
+static bool     s_torque_enabled       = false;
 
 #if TASK_MOTION_USE_MOCK
 /* Mock-mode servo simulator */
@@ -61,6 +62,7 @@ void TaskMotion_Init(void)
     (void)DrvSt3215_Init(&s_st_ctx, TASK_MOTION_SERVO_ID);
     s_last_written_steps = INT16_MIN;
     s_last_written_ms    = 0U;
+    s_torque_enabled     = false;
 
 #if TASK_MOTION_USE_MOCK
     s_mock_pos_steps    = 0;
@@ -136,6 +138,60 @@ void TaskMotion_Update(const MotionCmd_t *cmd,
 }
 
 #else /* ============ Real-servo path (HD stub until motor arrives) ============ */
+
+static St3215_IoResult_t do_write_byte(uint8_t  reg_addr,
+                                       uint8_t  value,
+                                       uint32_t tick_ms)
+{
+    uint8_t tx[ST3215_TX_BUF_SIZE];
+    uint8_t rx[ST3215_RX_BUF_SIZE];
+
+    uint8_t tx_len = DrvSt3215_EncodeWriteByte(tx, s_st_ctx.servo_id,
+                                               reg_addr, value);
+    if (tx_len == 0U) {
+        return ST3215_IO_BAD_FRAME;
+    }
+
+    AraStatus_t kr = BSP_UART_HalfDuplex_Transact(BSP_UART_ST3215, tx, tx_len,
+                                                  rx, ST3215_ACK_FRAME_LEN);
+    if (kr != ARA_OK) {
+        DrvSt3215_NoteIoFail(&s_st_ctx, 0U);
+        return DrvSt3215_ClassifyIoResult(&s_st_ctx, ST3215_PARSE_BAD_HEADER,
+                                          false, tick_ms);
+    }
+
+    uint16_t rx_len = 0U;
+    AraStatus_t rr  = BSP_UART_HD_WaitRx(BSP_UART_ST3215,
+                                         ST3215_IO_TIMEOUT_MS_1M, &rx_len);
+    if (rr == ARA_TIMEOUT) {
+        BSP_UART_HD_AbortRx(BSP_UART_ST3215);
+        DrvSt3215_NoteIoFail(&s_st_ctx, 0U);
+        return DrvSt3215_ClassifyIoResult(&s_st_ctx, ST3215_PARSE_OK,
+                                          true, tick_ms);
+    }
+    if (rr != ARA_OK) {
+        DrvSt3215_NoteIoFail(&s_st_ctx, 0U);
+        return DrvSt3215_ClassifyIoResult(&s_st_ctx, ST3215_PARSE_BAD_HEADER,
+                                          false, tick_ms);
+    }
+
+    uint8_t err_bits = 0U;
+    St3215_ParseResult_t pr = DrvSt3215_ParseAck(rx, (uint8_t)rx_len,
+                                                 s_st_ctx.servo_id, &err_bits);
+    if (pr == ST3215_PARSE_OK) {
+        DrvSt3215_NoteIoOk(&s_st_ctx, tick_ms);
+    } else {
+        DrvSt3215_NoteIoFail(&s_st_ctx, err_bits);
+    }
+    return DrvSt3215_ClassifyIoResult(&s_st_ctx, pr, false, tick_ms);
+}
+
+static St3215_IoResult_t do_set_torque(bool enable, uint32_t tick_ms)
+{
+    return do_write_byte(ST3215_REG_TORQUE_ENABLE,
+                         enable ? ST3215_TORQUE_ENABLE : ST3215_TORQUE_DISABLE,
+                         tick_ms);
+}
 
 static St3215_IoResult_t do_write_pos(int16_t  target_steps,
                                       uint16_t speed,
@@ -249,6 +305,21 @@ void TaskMotion_Update(const MotionCmd_t *cmd,
                       > TASK_MOTION_DEADBAND_STEPS);
     bool keepalive = ((tick_ms - s_last_written_ms) > TASK_MOTION_KEEPALIVE_MS);
     bool need_write = cmd->torque_on && (changed || keepalive || cmd->force_keepalive);
+    bool write_result_set = false;
+
+    if (cmd->torque_on != s_torque_enabled) {
+        state->last_write_result = do_set_torque(cmd->torque_on, tick_ms);
+        write_result_set = true;
+        if (state->last_write_result == ST3215_IO_OK) {
+            s_torque_enabled = cmd->torque_on;
+            if (!cmd->torque_on) {
+                s_last_written_steps = INT16_MIN;
+                s_last_written_ms    = 0U;
+            }
+        } else {
+            need_write = false;
+        }
+    }
 
     if (need_write) {
         uint16_t speed = (cmd->target_speed != 0U) ? cmd->target_speed
@@ -256,17 +327,23 @@ void TaskMotion_Update(const MotionCmd_t *cmd,
         uint8_t  acc   = (cmd->target_acc   != 0U) ? cmd->target_acc
                                                    : TASK_MOTION_DEFAULT_ACC;
         state->last_write_result = do_write_pos(target_steps, speed, acc, tick_ms);
+        write_result_set = true;
         if (state->last_write_result == ST3215_IO_OK) {
             s_last_written_steps = target_steps;
             s_last_written_ms    = tick_ms;
         }
-    } else {
+    } else if (!write_result_set) {
         state->last_write_result = ST3215_IO_OK;
     }
 
     /* Always read feedback. */
     state->last_read_result = do_read_feedback(tick_ms, &state->feedback);
-    state->feedback_valid   = (state->last_read_result == ST3215_IO_OK);
+    if (state->last_read_result == ST3215_IO_OK) {
+        state->feedback_valid = true;
+    } else if (s_st_ctx.last_fb_valid) {
+        state->feedback       = s_st_ctx.last_fb;
+        state->feedback_valid = false;
+    }
 
     state->servo_online  = DrvSt3215_IsOnline(&s_st_ctx, tick_ms);
     state->motion_status = state->feedback_valid
