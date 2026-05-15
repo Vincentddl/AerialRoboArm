@@ -13,6 +13,7 @@
 #include "debug_request.h"
 #include "bsp_uart.h"
 #include "dev_status.h"
+#include "task_motion.h"   /* TASK_MOTION_ANGLE_MIN_DEG / MAX_DEG */
 
 #include "FreeRTOS.h"
 #include "task.h"
@@ -152,9 +153,19 @@ static void console_poll(uint32_t tick_ms)
             DebugRequest_Post(DBG_REQ_CLEAR_FAULT, 0, 0);
             BSP_UART_Printf("[DBG] clear fault requested\r\n");
             break;
-        case 'e':
-            console_send_force(s_console_force_angle, true);
+        case 'e': {
+            /* Lock force mode at the servo's current physical position so
+             * enabling force does NOT command an unwanted slew back to 0
+             * deg. After 'e' the servo holds where it already is, then the
+             * operator can step from there with +/-/1/2/3/g. */
+            DataHub_t hub;
+            DataHub_Read(&hub);
+            int32_t cur = hub.servo_position_angle_deg;
+            if (cur < TASK_MOTION_ANGLE_MIN_DEG) cur = TASK_MOTION_ANGLE_MIN_DEG;
+            if (cur > TASK_MOTION_ANGLE_MAX_DEG) cur = TASK_MOTION_ANGLE_MAX_DEG;
+            console_send_force((int16_t)cur, true);
             break;
+        }
         case 'k':
             console_send_force(s_console_force_angle, false);
             break;

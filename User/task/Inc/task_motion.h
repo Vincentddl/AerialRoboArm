@@ -27,7 +27,7 @@
  * ============================================================================= */
 
 #ifndef TASK_MOTION_USE_MOCK
-#define TASK_MOTION_USE_MOCK            (1)
+#define TASK_MOTION_USE_MOCK            (0)
 #endif
 
 #define TASK_MOTION_SERVO_ID            (1U)   /**< Default ST3215 ID. */
@@ -37,7 +37,7 @@
 #define TASK_MOTION_ANGLE_MIN_DEG       (0)
 #define TASK_MOTION_ANGLE_MAX_DEG       (359)
 #define TASK_MOTION_DEFAULT_ACC         (50U)
-#define TASK_MOTION_DEFAULT_SPEED       (1000U)
+#define TASK_MOTION_DEFAULT_SPEED       (0U)    /**< 0 = ST3215 max speed (~300 deg/s at no load). */
 
 /* ============================================================================
  * Command / state types

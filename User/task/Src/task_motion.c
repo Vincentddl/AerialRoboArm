@@ -329,8 +329,9 @@ void TaskMotion_Update(const MotionCmd_t *cmd,
     }
 
     if (need_write) {
-        uint16_t speed = (cmd->target_speed != 0U) ? cmd->target_speed
-                                                   : TASK_MOTION_DEFAULT_SPEED;
+        /* ST3215 native semantics: speed == 0 means maximum speed.
+         * Keep this value transparent so upper layers decide the speed policy. */
+        uint16_t speed = cmd->target_speed;
         uint8_t  acc   = (cmd->target_acc   != 0U) ? cmd->target_acc
                                                    : TASK_MOTION_DEFAULT_ACC;
         state->last_write_result = do_write_pos(target_steps, speed, acc, tick_ms);

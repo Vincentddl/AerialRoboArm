@@ -140,12 +140,6 @@ static void handle_debug_request(uint32_t now_ms)
             enter_phase(CTRL_PHASE_SERVO_PING, now_ms);
         }
         break;
-    case DBG_REQ_SWITCH_MODE:
-    case DBG_REQ_SET_ESTOP:
-    case DBG_REQ_CALIBRATE_ZERO:
-    default:
-        /* Forwarded into Arbiter input injection in a later iteration. */
-        break;
     case DBG_REQ_FORCE_GOTO_ANGLE:
         if (req.arg2 < 0) {
             s_force_active = false;
@@ -156,6 +150,12 @@ static void handle_debug_request(uint32_t now_ms)
             s_force_angle_deg = (int16_t)deg;
             s_force_active    = true;
         }
+        break;
+    case DBG_REQ_SWITCH_MODE:
+    case DBG_REQ_SET_ESTOP:
+    case DBG_REQ_CALIBRATE_ZERO:
+    default:
+        /* Forwarded into Arbiter input injection in a later iteration. */
         break;
     }
 }
