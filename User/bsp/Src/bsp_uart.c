@@ -1,7 +1,7 @@
 /**
  * @file bsp_uart.c
- * @brief UART Driver with FreeRTOS Semaphore for DMA Safety (Multi-Instance)
- *        + Half-Duplex transaction state machine for ST3215 (USART2).
+ * @brief UART Driver: FSUS interrupt-RX / blocking-TX on USART2,
+ *        DMA ring buffers on USART1/3, DEBUG printf over DMA.
  */
 
 #include "bsp_uart.h"
@@ -18,17 +18,17 @@
 /* --- Configuration --- */
 #define UART_DEBUG_RX_BUF_SIZE   (128U)
 #define UART_ELRS_RX_BUF_SIZE    (128U)
-#define UART_ST3215_RX_BUF_SIZE  (64U)
+#define UART_FSUS_RX_BUF_SIZE    (256U)
 #define UART_TX_TIMEOUT_MS       (100U)
 
-/* Half-duplex notification bits */
+/* Half-duplex notification bits (legacy ST3215 HD state machine) */
 #define HD_NOTIFY_RX_DONE        (1U << 0)
 #define HD_NOTIFY_RX_ERROR       (1U << 1)
 
 /* --- Hardware Resources --- */
 extern UART_HandleTypeDef huart3;   // DEBUG
 extern UART_HandleTypeDef huart1;   // ELRS
-extern UART_HandleTypeDef huart2;   // ST3215 half-duplex (single wire)
+extern UART_HandleTypeDef huart2;   // FSUS (USART2, full-duplex)
 
 /* --- Internal Context --- */
 typedef struct {
@@ -41,13 +41,23 @@ typedef struct {
 
 static uint8_t s_debug_rx_buffer[UART_DEBUG_RX_BUF_SIZE];
 static uint8_t s_elrs_rx_buffer[UART_ELRS_RX_BUF_SIZE];
-static uint8_t s_st3215_rx_buffer[UART_ST3215_RX_BUF_SIZE];
 
 /* 多实例上下文数组 */
 static UartContext_t uart_ctx[BSP_UART_NUM];
 
 /* [IPC Resources - 仅供 DEBUG 发送使用] */
 static SemaphoreHandle_t tx_sem = NULL; // 发送完成信号量
+
+/* =============================================================================
+ * FSUS interrupt-mode RX ring buffer (USART2)
+ *
+ * ISR pushes one byte at a time; task reads via BSP_UART_Fsus_Recv.
+ * ============================================================================= */
+
+static uint8_t  s_fsus_rx_buf[UART_FSUS_RX_BUF_SIZE];
+static volatile uint16_t s_fsus_rx_head = 0U;  /* ISR writes */
+static uint16_t s_fsus_rx_tail = 0U;           /* task reads */
+static uint8_t  s_fsus_rx_byte;                /* 1-byte IT target */
 static char tx_buf[128];                // 发送缓冲区 (由信号量保护)
 
 /* =============================================================================
@@ -101,14 +111,12 @@ void BSP_UART_Init(void)
     /* 1. Bind hardware handles. */
     uart_ctx[BSP_UART_DEBUG].huart  = &huart3;
     uart_ctx[BSP_UART_ELRS].huart   = &huart1;
-    uart_ctx[BSP_UART_ST3215].huart = &huart2;   /* HD bus, owned by HD state machine */
+    uart_ctx[BSP_UART_ST3215].huart = &huart2;   /* FSUS, full-duplex IT RX */
 
     uart_ctx[BSP_UART_DEBUG].rx_buffer       = s_debug_rx_buffer;
     uart_ctx[BSP_UART_DEBUG].rx_buffer_size  = sizeof(s_debug_rx_buffer);
     uart_ctx[BSP_UART_ELRS].rx_buffer        = s_elrs_rx_buffer;
     uart_ctx[BSP_UART_ELRS].rx_buffer_size   = sizeof(s_elrs_rx_buffer);
-    uart_ctx[BSP_UART_ST3215].rx_buffer      = s_st3215_rx_buffer;
-    uart_ctx[BSP_UART_ST3215].rx_buffer_size = sizeof(s_st3215_rx_buffer);
 
     /* Initialize per-port software state. */
     for (int i = 0; i < BSP_UART_NUM; i++) {
@@ -116,8 +124,7 @@ void BSP_UART_Init(void)
         uart_ctx[i].rx_cplt_cb = NULL;
     }
 
-    /* 2. Start Circular DMA RX for DEBUG / ELRS ring buffers.
-     * ST3215 stays disarmed until a HD transaction kicks it. */
+    /* 2. Start Circular DMA RX for DEBUG / ELRS ring buffers. */
     HAL_UART_Receive_DMA(uart_ctx[BSP_UART_DEBUG].huart,
                          uart_ctx[BSP_UART_DEBUG].rx_buffer,
                          uart_ctx[BSP_UART_DEBUG].rx_buffer_size);
@@ -125,15 +132,19 @@ void BSP_UART_Init(void)
                          uart_ctx[BSP_UART_ELRS].rx_buffer,
                          uart_ctx[BSP_UART_ELRS].rx_buffer_size);
 
-    /* 3. Create the DEBUG TX semaphore used by BSP_UART_Printf. */
+    /* 3. Start interrupt-based RX on USART2 (FSUS).
+     *     One byte per interrupt, pushed to s_fsus_rx_buf in the ISR. */
+    HAL_UART_Receive_IT(&huart2, &s_fsus_rx_byte, 1);
+
+    /* 4. Create the DEBUG TX semaphore used by BSP_UART_Printf. */
     tx_sem = xSemaphoreCreateBinary();
 
-    /* 4. Allow the first DEBUG TX. */
+    /* 5. Allow the first DEBUG TX. */
     if (tx_sem != NULL) {
         xSemaphoreGive(tx_sem);
     }
 
-    /* 5. Half-duplex context init. */
+    /* 6. Half-duplex context init (legacy, kept for reference). */
     memset(&s_hd_ctx, 0, sizeof(s_hd_ctx));
     s_hd_ctx.state = HD_STATE_IDLE;
 }
@@ -258,7 +269,7 @@ AraStatus_t BSP_UART_HalfDuplex_Transact(BspUart_Dev_t  dev,
         (tx_len == 0U) || (expect_rx_len == 0U)) {
         return ARA_ERR_PARAM;
     }
-    if (expect_rx_len > UART_ST3215_RX_BUF_SIZE) {
+    if (expect_rx_len > UART_FSUS_RX_BUF_SIZE) {
         return ARA_ERR_PARAM;
     }
 
@@ -354,27 +365,21 @@ void BSP_UART_HD_AbortRx(BspUart_Dev_t dev)
 
 /* --- ISR Callbacks --- */
 
-// 1. 接收完成 (RingBuffer 通知 / HD 状态机)
+// 1. 接收完成
 void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
-    /* ST3215 half-duplex: end of RX leg of a transaction. */
+    /* FSUS (USART2): push each received byte into the FSUS ring buffer. */
     if (huart == uart_ctx[BSP_UART_ST3215].huart) {
-        if (s_hd_ctx.state == HD_STATE_RX_INFLIGHT) {
-            s_hd_ctx.rx_received_len = s_hd_ctx.expect_rx_len;
-            s_hd_ctx.state           = HD_STATE_IDLE;
-
-            BaseType_t hpw = pdFALSE;
-            if (s_hd_ctx.waiting_task != NULL) {
-                xTaskNotifyFromISR(s_hd_ctx.waiting_task,
-                                   HD_NOTIFY_RX_DONE,
-                                   eSetBits, &hpw);
-            }
-            portYIELD_FROM_ISR(hpw);
+        uint16_t next = (s_fsus_rx_head + 1U) % UART_FSUS_RX_BUF_SIZE;
+        if (next != s_fsus_rx_tail) {
+            s_fsus_rx_buf[s_fsus_rx_head] = s_fsus_rx_byte;
+            s_fsus_rx_head = next;
         }
+        HAL_UART_Receive_IT(huart, &s_fsus_rx_byte, 1);
         return;
     }
 
-    /* DEBUG / ELRS: legacy ringbuffer-cplt notification path. */
+    /* DEBUG / ELRS: legacy DMA ringbuffer-cplt notification path. */
     for (int i = 0; i < BSP_UART_NUM; i++) {
         if (huart == uart_ctx[i].huart && uart_ctx[i].rx_cplt_cb) {
             uart_ctx[i].rx_cplt_cb();
@@ -383,7 +388,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
     }
 }
 
-// 2. 发送完成 (信号量释放 / HD 状态机切到 RX)
+// 2. 发送完成
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 {
     /* DEBUG: release the printf semaphore. */
@@ -396,45 +401,15 @@ void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
         return;
     }
 
-    /* ST3215 half-duplex: TX leg complete, switch to RX leg. */
-    if (huart == uart_ctx[BSP_UART_ST3215].huart) {
-        if (s_hd_ctx.state == HD_STATE_TX_INFLIGHT) {
-            s_hd_ctx.state = HD_STATE_RX_INFLIGHT;
-            HAL_StatusTypeDef hr = HAL_UART_Receive_DMA(huart,
-                                                       s_hd_ctx.rx_buf,
-                                                       s_hd_ctx.expect_rx_len);
-            if (hr != HAL_OK) {
-                /* Could not arm RX. Notify the waiting task with error. */
-                s_hd_ctx.state      = HD_STATE_IDLE;
-                s_hd_ctx.last_error = (uint8_t)hr;
-                BaseType_t hpw = pdFALSE;
-                if (s_hd_ctx.waiting_task != NULL) {
-                    xTaskNotifyFromISR(s_hd_ctx.waiting_task,
-                                       HD_NOTIFY_RX_ERROR,
-                                       eSetBits, &hpw);
-                }
-                portYIELD_FROM_ISR(hpw);
-            }
-        }
-        return;
-    }
+    /* FSUS uses blocking TX — no callback action needed for USART2. */
 }
 
-// 3. 错误回调 (HD 状态机)
+// 3. 错误回调
 void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
+    /* FSUS (USART2): re-arm interrupt RX after an error. */
     if (huart == uart_ctx[BSP_UART_ST3215].huart) {
-        if (s_hd_ctx.state != HD_STATE_IDLE) {
-            s_hd_ctx.last_error = (uint8_t)(HAL_UART_GetError(huart) & 0xFFU);
-            s_hd_ctx.state      = HD_STATE_IDLE;
-            BaseType_t hpw = pdFALSE;
-            if (s_hd_ctx.waiting_task != NULL) {
-                xTaskNotifyFromISR(s_hd_ctx.waiting_task,
-                                   HD_NOTIFY_RX_ERROR,
-                                   eSetBits, &hpw);
-            }
-            portYIELD_FROM_ISR(hpw);
-        }
+        HAL_UART_Receive_IT(huart, &s_fsus_rx_byte, 1);
         return;
     }
 
@@ -447,7 +422,34 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
         }
         return;
     }
+}
 
-    /* DEBUG / ELRS ring buffers: HAL keeps the DMA running on framing errors,
-     * just clear so the next byte arrives. Nothing to do here for now. */
+/* =============================================================================
+ * FSUS transaction API (USART2, full-duplex, interrupt RX + blocking TX)
+ * ============================================================================= */
+
+void BSP_UART_Fsus_Send(const uint8_t *data, uint16_t len)
+{
+    if ((data == NULL) || (len == 0U)) {
+        return;
+    }
+    (void)HAL_UART_Transmit(&huart2, (uint8_t *)data, len, 100);
+}
+
+uint16_t BSP_UART_Fsus_Recv(uint8_t *data, uint16_t len)
+{
+    if ((data == NULL) || (len == 0U)) {
+        return 0U;
+    }
+    uint16_t count = 0U;
+    while ((count < len) && (s_fsus_rx_tail != s_fsus_rx_head)) {
+        data[count++] = s_fsus_rx_buf[s_fsus_rx_tail];
+        s_fsus_rx_tail = (s_fsus_rx_tail + 1U) % UART_FSUS_RX_BUF_SIZE;
+    }
+    return count;
+}
+
+void BSP_UART_Fsus_Flush(void)
+{
+    s_fsus_rx_tail = s_fsus_rx_head;
 }

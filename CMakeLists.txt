@@ -50,14 +50,14 @@ else ()
 endif ()
 
 include_directories(Core/Inc Drivers/STM32F1xx_HAL_Driver/Inc/Legacy Drivers/STM32F1xx_HAL_Driver/Inc Middlewares/Third_Party/FreeRTOS/Source/include Middlewares/Third_Party/FreeRTOS/Source/CMSIS_RTOS_V2 Middlewares/Third_Party/FreeRTOS/Source/portable/GCC/ARM_CM3 Drivers/CMSIS/Device/ST/STM32F1xx/Include Drivers/CMSIS/Include
-        # ===== demo_v7 User module include roots =====
+        # ===== User module include roots =====
         User/global/Inc User/bsp/Inc User/drv/Inc User/mod/Inc User/task/Inc User/app/Inc)
 
 add_definitions(-DDEBUG -DUSE_HAL_DRIVER -DSTM32F103xB)
 
 file(GLOB_RECURSE SOURCES "Core/*.*" "Middlewares/*.*" "Drivers/*.*" "User/*.*")
 
-# ===== demo_v7 Phase 1: exclude legacy code from build =====
+# ===== demo_v7: exclude legacy code from build =====
 list(FILTER SOURCES EXCLUDE REGEX ".*test_console_drvtest\\.c$")
 list(FILTER SOURCES EXCLUDE REGEX ".*app_threads\\.(c|h)$")
 list(FILTER SOURCES EXCLUDE REGEX ".*app_testbench\\.(c|h)$")

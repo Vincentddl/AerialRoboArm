@@ -1,13 +1,11 @@
 /**
  * @file task_motion.c
- * @brief ST3215 servo proxy implementation with Mock fallback for demo_v7.
- *
- * The old BLDC/FOC/PID implementation has been retired. This file now
- * targets the ST3215-HS smart joint where closed-loop is inside the servo.
+ * @brief FSUS servo proxy with Mock fallback.
  */
 
 #include "task_motion.h"
 #include "bsp_uart.h"
+#include "stm32f1xx_hal.h"
 
 #include <string.h>
 
@@ -15,38 +13,165 @@
  * Internal state
  * ============================================================================= */
 
-static DrvSt3215_Context_t s_st_ctx;
-
-/* Deadband + keepalive bookkeeping */
-static int16_t  s_last_written_steps   = INT16_MIN;
-static uint32_t s_last_written_ms      = 0U;
-static bool     s_torque_enabled       = false;
+/* Last-sent target tracking for change detection. */
+static float    s_last_target_deg     = -999.0f;
+static bool     s_torque_active       = false;
 
 #if TASK_MOTION_USE_MOCK
 /* Mock-mode servo simulator */
-static int32_t  s_mock_pos_steps       = 0;
-static int32_t  s_mock_target_steps    = 0;
-static int32_t  s_mock_velocity        = 0;
-static bool     s_mock_torque_on       = false;
-static uint32_t s_mock_last_tick_ms    = 0U;
+static float    s_mock_pos_deg        = 0.0f;
+static float    s_mock_target_deg     = 0.0f;
+static bool     s_mock_torque_on      = false;
+static uint32_t s_mock_last_tick_ms   = 0U;
 
-#define MOCK_SLEW_STEPS_PER_SEC   (2000)
+#define MOCK_SLEW_DEG_PER_SEC   (130.0f)
 #endif
 
 /* =============================================================================
  * Helpers
  * ============================================================================= */
 
-static int16_t clamp_angle_deg(int16_t deg)
+static float map_angle_to_fsus(float deg)
 {
-    if (deg < TASK_MOTION_ANGLE_MIN_DEG) {
-        return (int16_t)TASK_MOTION_ANGLE_MIN_DEG;
+    /* Keep upper layers on a compass-like 0..359 domain, while the FSUS servo
+     * receives the signed -180..+180 angle domain used by its UART protocol. */
+    /* Upper layer uses 0..359. FSUS uses -180..+180.
+     *  0..180   → stays the same
+     *  181..359 → -179..-1
+     */
+    if (deg > 180.0f) {
+        deg -= 360.0f;
     }
-    if (deg > TASK_MOTION_ANGLE_MAX_DEG) {
-        return (int16_t)TASK_MOTION_ANGLE_MAX_DEG;
-    }
+    /* Clamp to FSUS hardware limits. */
+    if (deg > FSUS_ANGLE_MAX_DEG)       return FSUS_ANGLE_MAX_DEG;
+    if (deg < FSUS_ANGLE_MIN_DEG)       return FSUS_ANGLE_MIN_DEG;
     return deg;
 }
+
+/**
+ * @brief FSUS transaction: send, then sync on response header 0x05 0x1C.
+ * @param tx_buf    Encoded request frame.
+ * @param tx_len    Request length.
+ * @param rx_buf    Response buffer (>= FSUS_RX_BUF_SIZE).
+ * @param timeout_ms Max wait.
+ * @return Total response bytes received, or 0 on timeout.
+ */
+static uint16_t fsus_transact(const uint8_t *tx_buf, uint16_t tx_len,
+                              uint8_t *rx_buf, uint32_t timeout_ms)
+{
+    /* Drop stale bytes before every request. A half-old response in the ring
+     * buffer would otherwise look like a valid but unrelated servo reply. */
+    BSP_UART_Fsus_Flush();
+    BSP_UART_Fsus_Send(tx_buf, tx_len);
+
+    uint32_t deadline = HAL_GetTick() + timeout_ms;
+    uint16_t total = 0U;
+
+    /* 1. Collect enough bytes to identify the response and read SIZE. */
+    while (total < 5U) {
+        total += BSP_UART_Fsus_Recv(&rx_buf[total], (uint16_t)(5U - total));
+        if (total >= 5U) break;
+        if (HAL_GetTick() > deadline) return 0U;
+    }
+
+    /* 2. Sync to response header 0x05 0x1C. If noise or stale bytes are
+     * present, slide one byte at a time until the frame boundary is aligned. */
+    while (rx_buf[0] != 0x05U || rx_buf[1] != 0x1CU) {
+        /* Shift buffer left by 1, read one more byte. */
+        for (uint16_t i = 0U; i < total - 1U; i++) {
+            rx_buf[i] = rx_buf[i + 1U];
+        }
+        total--;
+        while (BSP_UART_Fsus_Recv(&rx_buf[total], 1U) == 0U) {
+            if (HAL_GetTick() > deadline) return 0U;
+        }
+        total++;
+    }
+
+    /* 3. Read remaining bytes. SIZE is the content length.
+     *     Frame length = header(2) + cmd(1) + size(1) + content(size) + ck(1)
+     *                  = 5 + content_size. */
+    uint8_t content_size = rx_buf[3];
+    uint16_t frame_len = (uint16_t)(5U + content_size);
+    if (frame_len > FSUS_RX_BUF_SIZE) return 0U;
+
+    while (total < frame_len) {
+        total += BSP_UART_Fsus_Recv(&rx_buf[total], (uint16_t)(frame_len - total));
+        if (total >= frame_len) break;
+        if (HAL_GetTick() > deadline) return 0U;
+    }
+    return total;
+}
+
+/* =============================================================================
+ * Real-servo helpers
+ * ============================================================================= */
+
+#if !TASK_MOTION_USE_MOCK
+
+static FsusParseResult_t do_stop(uint8_t mode, uint16_t power_mw)
+{
+    uint8_t tx[FSUS_TX_BUF_SIZE];
+    uint8_t rx[FSUS_RX_BUF_SIZE];
+
+    uint16_t tx_len = DrvFsus_EncodeStop(tx, TASK_MOTION_SERVO_ID, mode, power_mw);
+    if (tx_len == 0U) {
+        return FSUS_PARSE_BAD_FRAME;
+    }
+
+    /* Stop has no defined response; this is a fire-and-forget control frame.
+     * In unlock mode it releases the servo's holding torque. */
+    BSP_UART_Fsus_Flush();
+    BSP_UART_Fsus_Send(tx, tx_len);
+    return FSUS_PARSE_OK;
+}
+
+static FsusParseResult_t do_set_angle(float    angle_deg,
+                                       float    velocity_deg_per_s,
+                                       uint16_t t_acc_ms,
+                                       uint16_t t_dec_ms,
+                                       uint16_t power_mw)
+{
+    uint8_t tx[FSUS_TX_BUF_SIZE];
+    uint8_t rx[FSUS_RX_BUF_SIZE];
+
+    /* FSUS expects no response for SetAngleByVelocity by default.
+     * Send and return OK — feedback is obtained via ServoMonitor. */
+    /* Encode a motion target. This updates the servo's internal target
+     * trajectory; the servo then closes the loop with its own encoder. */
+    uint16_t tx_len = DrvFsus_EncodeSetAngleByVelocity(tx, TASK_MOTION_SERVO_ID,
+                                                       angle_deg, velocity_deg_per_s,
+                                                       t_acc_ms, t_dec_ms, power_mw);
+    if (tx_len == 0U) {
+        return FSUS_PARSE_BAD_FRAME;
+    }
+    BSP_UART_Fsus_Flush();
+    BSP_UART_Fsus_Send(tx, tx_len);
+    return FSUS_PARSE_OK;
+}
+
+static FsusParseResult_t do_read_feedback(uint32_t        tick_ms,
+                                          FsusFeedback_t *out)
+{
+    uint8_t tx[FSUS_TX_BUF_SIZE];
+    uint8_t rx[FSUS_RX_BUF_SIZE];
+
+    /* Ask the servo to report the state measured by its internal controller:
+     * angle, voltage, current, power, temperature and status bits. */
+    uint16_t tx_len = DrvFsus_EncodeServoMonitor(tx, TASK_MOTION_SERVO_ID);
+    if (tx_len == 0U) {
+        return FSUS_PARSE_BAD_FRAME;
+    }
+
+    uint16_t rx_len = fsus_transact(tx, tx_len, rx, FSUS_IO_TIMEOUT_MS);
+    if (rx_len < 5U) {
+        return FSUS_PARSE_TIMEOUT;
+    }
+    /* Convert raw UART bytes into a typed feedback struct for the FSM. */
+    return DrvFsus_ParseServoMonitor(rx, rx_len, TASK_MOTION_SERVO_ID, tick_ms, out);
+}
+
+#endif /* !TASK_MOTION_USE_MOCK */
 
 /* =============================================================================
  * Public API
@@ -54,19 +179,14 @@ static int16_t clamp_angle_deg(int16_t deg)
 
 void TaskMotion_Init(void)
 {
-    (void)DrvSt3215_Init(&s_st_ctx, TASK_MOTION_SERVO_ID);
-    s_last_written_steps = INT16_MIN;
-    s_last_written_ms    = 0U;
-    s_torque_enabled     = false;
+    s_last_target_deg = -999.0f;
+    s_torque_active   = false;
 
 #if TASK_MOTION_USE_MOCK
-    s_mock_pos_steps    = 0;
-    s_mock_target_steps = 0;
-    s_mock_velocity     = 0;
-    s_mock_torque_on    = false;
-    s_mock_last_tick_ms = 0U;
-    /* Seed driver context as online so arbiter does not latch SERVO_OFFLINE. */
-    DrvSt3215_NoteIoOk(&s_st_ctx, 1U);
+    s_mock_pos_deg       = 0.0f;
+    s_mock_target_deg    = 0.0f;
+    s_mock_torque_on     = false;
+    s_mock_last_tick_ms  = 0U;
 #endif
 }
 
@@ -90,199 +210,45 @@ void TaskMotion_Update(const MotionCmd_t *cmd,
 
     s_mock_torque_on = cmd->torque_on;
     if (cmd->torque_on) {
-        s_mock_target_steps = ST3215_DEG_TO_STEPS(
-            clamp_angle_deg(cmd->target_angle_deg));
+        s_mock_target_deg = map_angle_to_fsus(cmd->target_angle_deg);
     }
 
-    int32_t err       = s_mock_target_steps - s_mock_pos_steps;
-    int32_t max_delta = (int32_t)MOCK_SLEW_STEPS_PER_SEC * (int32_t)dt_ms / 1000;
-    if (max_delta < 1) max_delta = 1;
+    /* First-order tracker */
+    float err       = s_mock_target_deg - s_mock_pos_deg;
+    float max_delta = MOCK_SLEW_DEG_PER_SEC * (float)(int32_t)dt_ms / 1000.0f;
+    if (max_delta < 0.1f) max_delta = 0.1f;
 
-    int32_t delta;
-    if (err > max_delta)       delta =  max_delta;
-    else if (err < -max_delta) delta = -max_delta;
-    else                       delta =  err;
+    float delta;
+    if (err > max_delta)        delta =  max_delta;
+    else if (err < -max_delta)  delta = -max_delta;
+    else                        delta =  err;
 
-    s_mock_pos_steps += delta;
-    s_mock_velocity   = (dt_ms > 0U) ? (delta * 1000 / (int32_t)dt_ms) : 0;
+    s_mock_pos_deg += delta;
 
     /* Simulated feedback */
-    St3215_Feedback_t fb;
+    FsusFeedback_t fb;
     memset(&fb, 0, sizeof(fb));
-    fb.position     = (int16_t)s_mock_pos_steps;
-    fb.speed        = (int16_t)s_mock_velocity;
-    fb.load         = (int16_t)((delta != 0) ? 100 : 0);
-    fb.voltage_dv   = 74U;
-    fb.temp_c       = 35U;
-    fb.moving       = (delta != 0);
-    fb.current      = 0;
-    fb.timestamp_ms = tick_ms;
+    fb.servo_id      = TASK_MOTION_SERVO_ID;
+    fb.angle_deg     = s_mock_pos_deg;
+    fb.voltage_mv    = 7400;
+    fb.current_ma    = 0;
+    fb.power_mw      = 0;
+    fb.temp_raw      = 3000;
+    fb.status        = 0;
+    fb.circle_count  = 0;
+    fb.timestamp_ms  = tick_ms;
 
-    s_st_ctx.last_fb       = fb;
-    s_st_ctx.last_fb_valid = true;
-    DrvSt3215_NoteIoOk(&s_st_ctx, tick_ms);
-
-    state->last_write_result = ST3215_IO_OK;
-    state->last_read_result  = ST3215_IO_OK;
+    state->last_write_result = FSUS_PARSE_OK;
+    state->last_read_result  = FSUS_PARSE_OK;
     state->feedback          = fb;
     state->feedback_valid    = true;
     state->servo_online      = true;
-    state->motion_status     = DrvSt3215_ClassifyMotion(&fb,
-                                                        (int16_t)s_mock_target_steps,
-                                                        NULL);
+    state->is_moving         = (delta > 0.5f || delta < -0.5f);
+    state->is_stalled        = false;
+    state->is_overload       = false;
 }
 
-#else /* ============ Real-servo path (HD stub until motor arrives) ============ */
-
-static St3215_IoResult_t do_write_byte(uint8_t  reg_addr,
-                                       uint8_t  value,
-                                       uint32_t tick_ms)
-{
-    uint8_t tx[ST3215_TX_BUF_SIZE];
-    uint8_t rx[ST3215_RX_BUF_SIZE];
-
-    uint8_t tx_len = DrvSt3215_EncodeWriteByte(tx, s_st_ctx.servo_id,
-                                               reg_addr, value);
-    if (tx_len == 0U) {
-        return ST3215_IO_BAD_FRAME;
-    }
-
-    AraStatus_t kr = BSP_UART_HalfDuplex_Transact(BSP_UART_ST3215, tx, tx_len,
-                                                  rx, ST3215_ACK_FRAME_LEN);
-    if (kr != ARA_OK) {
-        DrvSt3215_NoteIoFail(&s_st_ctx, 0U);
-        return DrvSt3215_ClassifyIoResult(&s_st_ctx, ST3215_PARSE_BAD_HEADER,
-                                          false, tick_ms);
-    }
-
-    uint16_t rx_len = 0U;
-    AraStatus_t rr  = BSP_UART_HD_WaitRx(BSP_UART_ST3215,
-                                         ST3215_IO_TIMEOUT_MS_1M, &rx_len);
-    if (rr == ARA_TIMEOUT) {
-        BSP_UART_HD_AbortRx(BSP_UART_ST3215);
-        DrvSt3215_NoteIoFail(&s_st_ctx, 0U);
-        return DrvSt3215_ClassifyIoResult(&s_st_ctx, ST3215_PARSE_OK,
-                                          true, tick_ms);
-    }
-    if (rr != ARA_OK) {
-        DrvSt3215_NoteIoFail(&s_st_ctx, 0U);
-        return DrvSt3215_ClassifyIoResult(&s_st_ctx, ST3215_PARSE_BAD_HEADER,
-                                          false, tick_ms);
-    }
-
-    uint8_t err_bits = 0U;
-    St3215_ParseResult_t pr = DrvSt3215_ParseAck(rx, (uint8_t)rx_len,
-                                                 s_st_ctx.servo_id, &err_bits);
-    if (pr == ST3215_PARSE_OK) {
-        DrvSt3215_NoteIoOk(&s_st_ctx, tick_ms);
-    } else {
-        DrvSt3215_NoteIoFail(&s_st_ctx, err_bits);
-    }
-    return DrvSt3215_ClassifyIoResult(&s_st_ctx, pr, false, tick_ms);
-}
-
-static St3215_IoResult_t do_set_torque(bool enable, uint32_t tick_ms)
-{
-    return do_write_byte(ST3215_REG_TORQUE_ENABLE,
-                         enable ? ST3215_TORQUE_ENABLE : ST3215_TORQUE_DISABLE,
-                         tick_ms);
-}
-
-static St3215_IoResult_t do_write_pos(int16_t  target_steps,
-                                      uint16_t speed,
-                                      uint8_t  acc,
-                                      uint32_t tick_ms)
-{
-    uint8_t tx[ST3215_TX_BUF_SIZE];
-    uint8_t rx[ST3215_RX_BUF_SIZE];
-
-    uint8_t tx_len = DrvSt3215_EncodeWritePos(tx, s_st_ctx.servo_id,
-                                              target_steps, speed, acc);
-    if (tx_len == 0U) {
-        return ST3215_IO_BAD_FRAME;
-    }
-
-    AraStatus_t kr = BSP_UART_HalfDuplex_Transact(BSP_UART_ST3215, tx, tx_len,
-                                                  rx, ST3215_ACK_FRAME_LEN);
-    if (kr != ARA_OK) {
-        DrvSt3215_NoteIoFail(&s_st_ctx, 0U);
-        return DrvSt3215_ClassifyIoResult(&s_st_ctx, ST3215_PARSE_BAD_HEADER,
-                                          false, tick_ms);
-    }
-
-    uint16_t rx_len = 0U;
-    AraStatus_t rr  = BSP_UART_HD_WaitRx(BSP_UART_ST3215,
-                                         ST3215_IO_TIMEOUT_MS_1M, &rx_len);
-    if (rr == ARA_TIMEOUT) {
-        BSP_UART_HD_AbortRx(BSP_UART_ST3215);
-        DrvSt3215_NoteIoFail(&s_st_ctx, 0U);
-        return DrvSt3215_ClassifyIoResult(&s_st_ctx, ST3215_PARSE_OK,
-                                          true, tick_ms);
-    }
-    if (rr != ARA_OK) {
-        DrvSt3215_NoteIoFail(&s_st_ctx, 0U);
-        return DrvSt3215_ClassifyIoResult(&s_st_ctx, ST3215_PARSE_BAD_HEADER,
-                                          false, tick_ms);
-    }
-
-    uint8_t err_bits = 0U;
-    St3215_ParseResult_t pr = DrvSt3215_ParseAck(rx, (uint8_t)rx_len,
-                                                 s_st_ctx.servo_id, &err_bits);
-    if (pr == ST3215_PARSE_OK) {
-        DrvSt3215_NoteIoOk(&s_st_ctx, tick_ms);
-    } else {
-        DrvSt3215_NoteIoFail(&s_st_ctx, err_bits);
-    }
-    return DrvSt3215_ClassifyIoResult(&s_st_ctx, pr, false, tick_ms);
-}
-
-static St3215_IoResult_t do_read_feedback(uint32_t           tick_ms,
-                                          St3215_Feedback_t *out)
-{
-    uint8_t tx[ST3215_TX_BUF_SIZE];
-    uint8_t rx[ST3215_RX_BUF_SIZE];
-
-    uint8_t tx_len = DrvSt3215_EncodeReadFeedback(tx, s_st_ctx.servo_id);
-    if (tx_len == 0U) {
-        return ST3215_IO_BAD_FRAME;
-    }
-
-    AraStatus_t kr = BSP_UART_HalfDuplex_Transact(BSP_UART_ST3215, tx, tx_len,
-                                                  rx, ST3215_FEEDBACK_FRAME_LEN);
-    if (kr != ARA_OK) {
-        DrvSt3215_NoteIoFail(&s_st_ctx, 0U);
-        return DrvSt3215_ClassifyIoResult(&s_st_ctx, ST3215_PARSE_BAD_HEADER,
-                                          false, tick_ms);
-    }
-
-    uint16_t rx_len = 0U;
-    AraStatus_t rr  = BSP_UART_HD_WaitRx(BSP_UART_ST3215,
-                                         ST3215_IO_TIMEOUT_MS_1M, &rx_len);
-    if (rr == ARA_TIMEOUT) {
-        BSP_UART_HD_AbortRx(BSP_UART_ST3215);
-        DrvSt3215_NoteIoFail(&s_st_ctx, 0U);
-        return DrvSt3215_ClassifyIoResult(&s_st_ctx, ST3215_PARSE_OK,
-                                          true, tick_ms);
-    }
-    if (rr != ARA_OK) {
-        DrvSt3215_NoteIoFail(&s_st_ctx, 0U);
-        return DrvSt3215_ClassifyIoResult(&s_st_ctx, ST3215_PARSE_BAD_HEADER,
-                                          false, tick_ms);
-    }
-
-    uint8_t err_bits = 0U;
-    St3215_ParseResult_t pr = DrvSt3215_ParseFeedback(rx, (uint8_t)rx_len,
-                                                      s_st_ctx.servo_id,
-                                                      tick_ms, out, &err_bits);
-    if (pr == ST3215_PARSE_OK) {
-        DrvSt3215_NoteIoOk(&s_st_ctx, tick_ms);
-        s_st_ctx.last_fb       = *out;
-        s_st_ctx.last_fb_valid = true;
-    } else {
-        DrvSt3215_NoteIoFail(&s_st_ctx, err_bits);
-    }
-    return DrvSt3215_ClassifyIoResult(&s_st_ctx, pr, false, tick_ms);
-}
+#else /* ============ Real-servo path (FSUS) ============ */
 
 void TaskMotion_Update(const MotionCmd_t *cmd,
                        uint32_t           tick_ms,
@@ -293,70 +259,68 @@ void TaskMotion_Update(const MotionCmd_t *cmd,
     }
     memset(state, 0, sizeof(*state));
 
-    int16_t target_steps = (int16_t)ST3215_DEG_TO_STEPS(
-        clamp_angle_deg(cmd->target_angle_deg));
+    float target_deg = map_angle_to_fsus(cmd->target_angle_deg);
 
-    /* Compute the deadband delta in int32 to avoid the int16 narrowing
-     * trap: when s_last_written_steps == INT16_MIN (the sentinel before
-     * the first successful write), target_steps - INT16_MIN = 32768,
-     * which is unrepresentable as int16. Truncating that back to int16
-     * silently flips it to INT16_MIN and breaks the very first write
-     * detection. Doing the math in int32 keeps the diff exact, and
-     * abs() on an int32 value is well-defined for everything except
-     * INT32_MIN (which we never reach with int16 inputs). */
-    int32_t target_i32  = (int32_t)target_steps;
-    int32_t last_i32    = (int32_t)s_last_written_steps;
-    int32_t diff_steps  = target_i32 - last_i32;
-    if (diff_steps < 0) diff_steps = -diff_steps;
-
-    bool changed   = (diff_steps > TASK_MOTION_DEADBAND_STEPS);
-    bool keepalive = ((tick_ms - s_last_written_ms) > TASK_MOTION_KEEPALIVE_MS);
-    bool need_write = cmd->torque_on && (changed || keepalive || cmd->force_keepalive);
-    bool write_result_set = false;
-
-    if (cmd->torque_on != s_torque_enabled) {
-        state->last_write_result = do_set_torque(cmd->torque_on, tick_ms);
-        write_result_set = true;
-        if (state->last_write_result == ST3215_IO_OK) {
-            s_torque_enabled = cmd->torque_on;
-            if (!cmd->torque_on) {
-                s_last_written_steps = INT16_MIN;
-                s_last_written_ms    = 0U;
+    /* --- Torque transition ---
+     * Protocol-level meaning:
+     *   false -> Stop(unlock), release holding torque
+     *   true  -> send position command, servo holds/follows target internally */
+    if (cmd->torque_on != s_torque_active) {
+        if (cmd->torque_on) {
+            /* Enable: send motion command to lock at target. */
+            state->last_write_result = do_set_angle(target_deg,
+                                                    cmd->velocity_deg_per_s,
+                                                    cmd->t_acc_ms,
+                                                    cmd->t_dec_ms,
+                                                    cmd->power_mw);
+            if (state->last_write_result == FSUS_PARSE_OK) {
+                s_torque_active   = true;
+                s_last_target_deg = target_deg;
             }
         } else {
-            need_write = false;
+            /* Disable: stop and unlock. */
+            state->last_write_result = do_stop(FSUS_STOP_MODE_UNLOCK, 0U);
+            s_torque_active   = false;
+            s_last_target_deg = -999.0f;
         }
+    } else if (cmd->torque_on) {
+        /* --- Target change detection ---
+         * Avoid spamming the bus with the same target every control tick.
+         * The servo keeps running its internal closed loop after one command. */
+        float diff = target_deg - s_last_target_deg;
+        if (diff < 0.0f) diff = -diff;
+        bool changed = (diff > 0.5f) || cmd->force_update;
+
+        if (changed) {
+            state->last_write_result = do_set_angle(target_deg,
+                                                    cmd->velocity_deg_per_s,
+                                                    cmd->t_acc_ms,
+                                                    cmd->t_dec_ms,
+                                                    cmd->power_mw);
+            if (state->last_write_result == FSUS_PARSE_OK) {
+                s_last_target_deg = target_deg;
+            }
+        } else {
+            state->last_write_result = FSUS_PARSE_OK;
+        }
+    } else {
+        state->last_write_result = FSUS_PARSE_OK;
     }
 
-    if (need_write) {
-        /* ST3215 native semantics: speed == 0 means maximum speed.
-         * Keep this value transparent so upper layers decide the speed policy. */
-        uint16_t speed = cmd->target_speed;
-        uint8_t  acc   = (cmd->target_acc   != 0U) ? cmd->target_acc
-                                                   : TASK_MOTION_DEFAULT_ACC;
-        state->last_write_result = do_write_pos(target_steps, speed, acc, tick_ms);
-        write_result_set = true;
-        if (state->last_write_result == ST3215_IO_OK) {
-            s_last_written_steps = target_steps;
-            s_last_written_ms    = tick_ms;
-        }
-    } else if (!write_result_set) {
-        state->last_write_result = ST3215_IO_OK;
-    }
-
-    /* Always read feedback. */
+    /* --- Always read feedback ---
+     * Command frames tell the servo what to do; monitor frames tell us what
+     * actually happened inside the servo controller. */
     state->last_read_result = do_read_feedback(tick_ms, &state->feedback);
-    if (state->last_read_result == ST3215_IO_OK) {
+    if (state->last_read_result == FSUS_PARSE_OK) {
         state->feedback_valid = true;
-    } else if (s_st_ctx.last_fb_valid) {
-        state->feedback       = s_st_ctx.last_fb;
-        state->feedback_valid = false;
-    }
+        state->servo_online   = true;
 
-    state->servo_online  = DrvSt3215_IsOnline(&s_st_ctx, tick_ms);
-    state->motion_status = state->feedback_valid
-        ? DrvSt3215_ClassifyMotion(&state->feedback, target_steps, NULL)
-        : ST3215_MOTION_UNKNOWN;
+        /* Motion classification from servo status byte. */
+        uint8_t st = state->feedback.status;
+        state->is_stalled  = ((st >> 2) & 0x01U) != 0U;  /* BIT2 = stall */
+        state->is_overload = (st != 0U);                   /* any fault */
+        state->is_moving   = !state->is_stalled;           /* rough */
+    }
 }
 
 #endif /* TASK_MOTION_USE_MOCK */

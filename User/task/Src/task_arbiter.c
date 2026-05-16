@@ -82,7 +82,7 @@ void TaskArbiter_Decide(const ArbiterInput_t *in, ArbiterOutput_t *out)
         out->mode             = ARA_MODE_MANUAL;
         out->torque_request   = true;
         out->target_angle_deg = rc_analog_to_angle_deg(rc->ch1_percent);
-        out->target_speed     = TASK_MOTION_DEFAULT_SPEED;
+        out->target_speed     = 0U;
         out->target_acc       = 50U;
         out->gripper_cmd      = rc->gripper_cmd;
         out->roll_degree      = rc->roll_degree;
@@ -100,7 +100,7 @@ void TaskArbiter_Decide(const ArbiterInput_t *in, ArbiterOutput_t *out)
             out->mode             = ARA_MODE_AUTO;
             out->torque_request   = true;
             out->target_angle_deg = vs->target_angle_deg;
-            out->target_speed     = (vs->target_speed != 0U) ? vs->target_speed : TASK_MOTION_DEFAULT_SPEED;
+            out->target_speed     = (vs->target_speed != 0U) ? vs->target_speed : 0U;
             out->target_acc       = 50U;
             out->gripper_cmd      = GRIPPER_CMD_STOP;
             out->roll_degree      = 90U;

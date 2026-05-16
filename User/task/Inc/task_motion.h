@@ -1,69 +1,68 @@
 /**
  * @file task_motion.h
- * @brief ST3215 servo proxy (L4).
+ * @brief FSUS servo proxy (L4).
  *
- * Motion is now a thin agent over the ST3215 bus:
- *   - Encode target / read feedback via drv_st3215.
- *   - Issue half-duplex transactions via bsp_uart HD API.
- *   - De-duplicate writes by deadband + periodic keepalive.
+ * Motion is a thin agent over the FSUS bus:
+ *   - Encode target / read feedback via drv_fsus.
+ *   - Issue transactions via bsp_uart FSUS API (blocking TX + interrupt RX).
  *
- * demo_v7 ships with TASK_MOTION_USE_MOCK=1 by default so the whole control
- * stack runs without the electric servo or USART2. The mock simulates a
- * first-order tracker (servo "follows" target at a finite slew rate),
- * producing plausible feedback.
- *
- * When the ST3215 is physically connected and USART2 is wired, flip the
- * macro to 0 and replace the bsp_uart HD stub with the real DMA flow.
+ * MOCK mode simulates a first-order tracker producing plausible feedback.
+ * Set TASK_MOTION_USE_MOCK=0 when the HX8-U26H-M is physically connected.
  */
 
 #ifndef TASK_MOTION_H
 #define TASK_MOTION_H
 
 #include "ara_def.h"
-#include "drv_st3215.h"
+#include "drv_fsus.h"
 
 /* ============================================================================
  * Compile-time configuration
  * ============================================================================= */
 
 #ifndef TASK_MOTION_USE_MOCK
-#define TASK_MOTION_USE_MOCK            (0)
+#define TASK_MOTION_USE_MOCK            (1)
 #endif
 
-#define TASK_MOTION_SERVO_ID            (1U)   /**< Default ST3215 ID. */
+#define TASK_MOTION_SERVO_ID            (0U)    /**< Default FSUS servo ID. */
 
-#define TASK_MOTION_DEADBAND_STEPS      (5)    /**< ~0.44 degree. */
-#define TASK_MOTION_KEEPALIVE_MS        (200U) /**< Force periodic WritePos. */
-#define TASK_MOTION_ANGLE_MIN_DEG       (0)
-#define TASK_MOTION_ANGLE_MAX_DEG       (359)
-#define TASK_MOTION_DEFAULT_ACC         (50U)
-#define TASK_MOTION_DEFAULT_SPEED       (0U)    /**< 0 = ST3215 max speed (~300 deg/s at no load). */
+#define TASK_MOTION_ANGLE_MIN_DEG       (0)     /**< FSUS range is -180..+180, */
+#define TASK_MOTION_ANGLE_MAX_DEG       (359)   /**< kept for upper-layer compat. */
+
+#define TASK_MOTION_DEFAULT_VELOCITY    (300.0f)/**< deg/s, bring-up safe. */
+#define TASK_MOTION_DEFAULT_T_ACC_MS    (100U)  /**< Acceleration time. */
+#define TASK_MOTION_DEFAULT_T_DEC_MS    (100U)  /**< Deceleration time. */
+#define TASK_MOTION_DEFAULT_POWER_MW    (1000U) /**< Default execution power. */
 
 /* ============================================================================
  * Command / state types
  * ============================================================================= */
 
 typedef struct {
-    bool     torque_on;              /**< If false, motion releases torque. */
-    int16_t  target_angle_deg;       /**< Commanded joint angle. */
-    uint16_t target_speed;           /**< step/s. 0 means servo default. */
-    uint8_t  target_acc;             /**< 0..254. */
-    bool     force_keepalive;        /**< Force WritePos regardless of deadband. */
+    bool     torque_on;              /**< false = send Stop(unlock). */
+    float    target_angle_deg;       /**< Commanded angle, -180..+180. */
+    float    velocity_deg_per_s;     /**< Traverse speed. */
+    uint16_t t_acc_ms;               /**< Accel time, >= 20. */
+    uint16_t t_dec_ms;               /**< Decel time, >= 20. */
+    uint16_t power_mw;               /**< Execution power, 0 = servo default. */
+    bool     force_update;           /**< Bypass change detection. */
 } MotionCmd_t;
 
 typedef struct {
     /* --- This-tick IO outcome --- */
-    St3215_IoResult_t   last_write_result;
-    St3215_IoResult_t   last_read_result;
+    FsusParseResult_t   last_write_result;
+    FsusParseResult_t   last_read_result;
 
-    /* --- Latest feedback (valid iff last_read_result == OK) --- */
-    St3215_Feedback_t   feedback;
+    /* --- Latest feedback --- */
+    FsusFeedback_t      feedback;
     bool                feedback_valid;
 
-    /* --- High-level motion classification --- */
-    St3215_MotionStatus_t motion_status;
+    /* --- Motion status (simplified) --- */
+    bool                is_moving;      /**< Estimated from angle delta. */
+    bool                is_stalled;     /**< BIT2 in servo status byte. */
+    bool                is_overload;    /**< Any fault bit set. */
 
-    /* --- Link health projected from driver context --- */
+    /* --- Link health --- */
     bool                servo_online;
 } MotionState_t;
 
@@ -71,21 +70,8 @@ typedef struct {
  * API
  * ============================================================================= */
 
-/**
- * @brief Initialise driver context, clear counters. No IO. Safe pre-scheduler.
- */
 void TaskMotion_Init(void);
 
-/**
- * @brief Execute one 50 Hz motion step.
- * @param cmd     Commanded motion from the arbiter / manipulator FSM.
- * @param tick_ms Current system tick in milliseconds.
- * @param state   Output state structure.
- *
- * @note Must run in task context (HD WaitRx uses vTaskDelay). Time budget:
- *       - Mock mode: microseconds.
- *       - Real mode: <= 2 ms WritePos + 2 ms ReadFeedback = 4 ms worst-case.
- */
 void TaskMotion_Update(const MotionCmd_t *cmd,
                        uint32_t           tick_ms,
                        MotionState_t     *state);

@@ -35,7 +35,7 @@ typedef enum {
 typedef struct {
     ManipulatorState_t current_state;
     uint32_t           state_enter_ms;
-    int16_t            last_target_angle_deg;
+    float              last_target_angle_deg;
 } TaskManipulator_Context_t;
 
 /* ============================================================================

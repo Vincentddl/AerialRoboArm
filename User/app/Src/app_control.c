@@ -13,8 +13,6 @@
 #include "task_manipulator.h"
 #include "task_motion.h"
 
-#include "drv_st3215.h"
-
 #include "FreeRTOS.h"
 #include "task.h"
 #include "cmsis_os2.h"
@@ -91,20 +89,16 @@ static void publish_hub(uint32_t now_ms, uint32_t loop_count)
     snap.arbiter_mode             = s_arb.mode;
     snap.arbiter_reason_code      = (uint8_t)s_arb.reason_code;
 
-    snap.servo_target_angle_deg   = s_arb.target_angle_deg;
-    snap.servo_target_steps       = (int16_t)ST3215_DEG_TO_STEPS(s_arb.target_angle_deg);
+    snap.servo_target_angle_deg   = (int16_t)s_arb.target_angle_deg;
     snap.servo_target_speed       = s_arb.target_speed;
     snap.servo_target_acc         = s_arb.target_acc;
     snap.servo_torque_request     = s_arb.torque_request;
 
     if (s_mstate.feedback_valid) {
-        snap.servo_position_steps     = s_mstate.feedback.position;
-        snap.servo_position_angle_deg = (int16_t)ST3215_STEPS_TO_DEG(s_mstate.feedback.position);
-        snap.servo_velocity_steps     = s_mstate.feedback.speed;
-        snap.servo_load               = s_mstate.feedback.load;
-        snap.servo_voltage_dv         = s_mstate.feedback.voltage_dv;
-        snap.servo_temp_c             = s_mstate.feedback.temp_c;
-        snap.servo_moving             = s_mstate.feedback.moving;
+        snap.servo_position_angle_deg = (int16_t)s_mstate.feedback.angle_deg;
+        snap.servo_load               = s_mstate.feedback.current_ma;
+        snap.servo_voltage_dv         = (uint8_t)(s_mstate.feedback.voltage_mv / 100U);
+        snap.servo_moving             = s_mstate.is_moving;
     }
     snap.servo_status = s_mstate.servo_online ? ARA_OK : ARA_ERR_DISCONNECTED;
 
@@ -178,13 +172,15 @@ static void step_ping(uint32_t now_ms)
     /* Mock mode: skip right through to RUNNING. */
     enter_phase(CTRL_PHASE_RUNNING, now_ms);
 #else
-    /* Real mode: run one write+read cycle as a liveness probe. */
+    /* Real mode: probe servo via TaskMotion_Update (ServoMonitor read). */
     MotionCmd_t probe = {
-        .torque_on        = false,
-        .target_angle_deg = 0,
-        .target_speed     = 0U,
-        .target_acc       = 50U,
-        .force_keepalive  = true,
+        .torque_on          = false,
+        .target_angle_deg   = 0.0f,
+        .velocity_deg_per_s = 0.0f,
+        .t_acc_ms           = 0U,
+        .t_dec_ms           = 0U,
+        .power_mw           = 0U,
+        .force_update       = true,
     };
     MotionState_t ms;
     TaskMotion_Update(&probe, now_ms, &ms);
@@ -233,20 +229,16 @@ static void step_fault(uint32_t now_ms)
 
 static void step_running_force(uint32_t now_ms)
 {
-    /* Bypass Arbiter / Manipulator. Drive Motion directly with the
-     * locked target angle. Feedback (read leg) still happens inside
-     * TaskMotion_Update, so DataHub publishes pos/load as usual and
-     * the operator can watch the closed loop converge. */
-    s_mcmd.torque_on        = true;
-    s_mcmd.target_angle_deg = s_force_angle_deg;
-    s_mcmd.target_speed     = TASK_MOTION_DEFAULT_SPEED;
-    s_mcmd.target_acc       = TASK_MOTION_DEFAULT_ACC;
-    s_mcmd.force_keepalive  = false;
+    s_mcmd.torque_on          = true;
+    s_mcmd.target_angle_deg   = (float)s_force_angle_deg;
+    s_mcmd.velocity_deg_per_s = TASK_MOTION_DEFAULT_VELOCITY;
+    s_mcmd.t_acc_ms           = TASK_MOTION_DEFAULT_T_ACC_MS;
+    s_mcmd.t_dec_ms           = TASK_MOTION_DEFAULT_T_DEC_MS;
+    s_mcmd.power_mw           = TASK_MOTION_DEFAULT_POWER_MW;
+    s_mcmd.force_update       = false;
 
     TaskMotion_Update(&s_mcmd, now_ms, &s_mstate);
 
-    /* Keep the RC / Vision artefacts in DataHub fresh for visibility
-     * even though they don't drive anything in force mode. */
     TaskRc_Update(now_ms, &s_rc);
     TaskVision_Update(now_ms, &s_vis);
 }
