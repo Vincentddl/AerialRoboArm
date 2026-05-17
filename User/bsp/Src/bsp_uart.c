@@ -60,6 +60,10 @@ static uint16_t s_fsus_rx_tail = 0U;           /* task reads */
 static uint8_t  s_fsus_rx_byte;                /* 1-byte IT target */
 static char tx_buf[128];                // 发送缓冲区 (由信号量保护)
 
+/* Bring-up diagnostics: TX/RX byte counters visible to upper layers. */
+static volatile uint32_t s_fsus_tx_bytes = 0U;
+static volatile uint32_t s_fsus_rx_bytes = 0U;
+
 /* =============================================================================
  * Half-Duplex transaction state (ST3215 / USART2)
  *
@@ -374,6 +378,7 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
         if (next != s_fsus_rx_tail) {
             s_fsus_rx_buf[s_fsus_rx_head] = s_fsus_rx_byte;
             s_fsus_rx_head = next;
+            s_fsus_rx_bytes++;
         }
         HAL_UART_Receive_IT(huart, &s_fsus_rx_byte, 1);
         return;
@@ -433,7 +438,9 @@ void BSP_UART_Fsus_Send(const uint8_t *data, uint16_t len)
     if ((data == NULL) || (len == 0U)) {
         return;
     }
-    (void)HAL_UART_Transmit(&huart2, (uint8_t *)data, len, 100);
+    if (HAL_UART_Transmit(&huart2, (uint8_t *)data, len, 100) == HAL_OK) {
+        s_fsus_tx_bytes += len;
+    }
 }
 
 uint16_t BSP_UART_Fsus_Recv(uint8_t *data, uint16_t len)
@@ -453,3 +460,6 @@ void BSP_UART_Fsus_Flush(void)
 {
     s_fsus_rx_tail = s_fsus_rx_head;
 }
+
+uint32_t BSP_UART_Fsus_GetTxBytes(void) { return s_fsus_tx_bytes; }
+uint32_t BSP_UART_Fsus_GetRxBytes(void) { return s_fsus_rx_bytes; }

@@ -21,13 +21,13 @@
  * ============================================================================= */
 
 #ifndef TASK_MOTION_USE_MOCK
-#define TASK_MOTION_USE_MOCK            (1)
+#define TASK_MOTION_USE_MOCK            (0)
 #endif
 
 #define TASK_MOTION_SERVO_ID            (0U)    /**< Default FSUS servo ID. */
 
-#define TASK_MOTION_ANGLE_MIN_DEG       (0)     /**< FSUS range is -180..+180, */
-#define TASK_MOTION_ANGLE_MAX_DEG       (359)   /**< kept for upper-layer compat. */
+#define TASK_MOTION_ANGLE_MIN_DEG       (-180)  /**< FSUS native: signed, [-180,+180]. */
+#define TASK_MOTION_ANGLE_MAX_DEG       (180)
 
 #define TASK_MOTION_DEFAULT_VELOCITY    (300.0f)/**< deg/s, bring-up safe. */
 #define TASK_MOTION_DEFAULT_T_ACC_MS    (100U)  /**< Acceleration time. */

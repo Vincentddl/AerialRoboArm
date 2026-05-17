@@ -8,11 +8,10 @@
 
 static int16_t rc_analog_to_angle_deg(int16_t ch1_percent)
 {
-    /* Map -100..+100 to 0..360 degrees linearly. Demo mapping only;
-     * the real mechanism range is clamped by the ST3215 MIN/MAX limits. */
-    int32_t deg = ((int32_t)ch1_percent + 100) * 360 / 200;
-    if (deg < 0)   deg = 0;
-    if (deg > 359) deg = 359;
+    /* Map RC ch1 (-100..+100) linearly to the FSUS-native -180..+180 range. */
+    int32_t deg = (int32_t)ch1_percent * 180 / 100;
+    if (deg < TASK_MOTION_ANGLE_MIN_DEG) deg = TASK_MOTION_ANGLE_MIN_DEG;
+    if (deg > TASK_MOTION_ANGLE_MAX_DEG) deg = TASK_MOTION_ANGLE_MAX_DEG;
     return (int16_t)deg;
 }
 

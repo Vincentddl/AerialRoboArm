@@ -6,6 +6,7 @@
 #include "task_motion.h"
 #include "bsp_uart.h"
 #include "stm32f1xx_hal.h"
+#include "cmsis_os2.h"
 
 #include <string.h>
 
@@ -33,16 +34,8 @@ static uint32_t s_mock_last_tick_ms   = 0U;
 
 static float map_angle_to_fsus(float deg)
 {
-    /* Keep upper layers on a compass-like 0..359 domain, while the FSUS servo
-     * receives the signed -180..+180 angle domain used by its UART protocol. */
-    /* Upper layer uses 0..359. FSUS uses -180..+180.
-     *  0..180   → stays the same
-     *  181..359 → -179..-1
-     */
-    if (deg > 180.0f) {
-        deg -= 360.0f;
-    }
-    /* Clamp to FSUS hardware limits. */
+    /* Whole stack now operates in the FSUS-native signed -180..+180 domain.
+     * This helper only enforces hardware range; no wrap/translation needed. */
     if (deg > FSUS_ANGLE_MAX_DEG)       return FSUS_ANGLE_MAX_DEG;
     if (deg < FSUS_ANGLE_MIN_DEG)       return FSUS_ANGLE_MIN_DEG;
     return deg;
@@ -72,6 +65,7 @@ static uint16_t fsus_transact(const uint8_t *tx_buf, uint16_t tx_len,
         total += BSP_UART_Fsus_Recv(&rx_buf[total], (uint16_t)(5U - total));
         if (total >= 5U) break;
         if (HAL_GetTick() > deadline) return 0U;
+        osDelay(1U);   /* yield so lower-prio tasks (housekeeping/IWDG) run */
     }
 
     /* 2. Sync to response header 0x05 0x1C. If noise or stale bytes are
@@ -84,6 +78,7 @@ static uint16_t fsus_transact(const uint8_t *tx_buf, uint16_t tx_len,
         total--;
         while (BSP_UART_Fsus_Recv(&rx_buf[total], 1U) == 0U) {
             if (HAL_GetTick() > deadline) return 0U;
+            osDelay(1U);
         }
         total++;
     }
@@ -99,6 +94,7 @@ static uint16_t fsus_transact(const uint8_t *tx_buf, uint16_t tx_len,
         total += BSP_UART_Fsus_Recv(&rx_buf[total], (uint16_t)(frame_len - total));
         if (total >= frame_len) break;
         if (HAL_GetTick() > deadline) return 0U;
+        osDelay(1U);
     }
     return total;
 }

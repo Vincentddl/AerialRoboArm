@@ -76,6 +76,15 @@ uint16_t BSP_UART_Fsus_Recv(uint8_t *data, uint16_t len);
  */
 void BSP_UART_Fsus_Flush(void);
 
+/**
+ * @brief Bring-up diagnostics: cumulative TX/RX byte counters on USART2.
+ *        TX counter increments after a successful HAL_UART_Transmit; RX
+ *        counter increments inside the RxCpltCallback for each byte that
+ *        actually lands in the ring buffer.
+ */
+uint32_t BSP_UART_Fsus_GetTxBytes(void);
+uint32_t BSP_UART_Fsus_GetRxBytes(void);
+
 /* =============================================================================
  * Half-Duplex API (legacy, ST3215 — kept for reference, not called currently)
  * ============================================================================= */

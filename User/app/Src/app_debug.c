@@ -98,8 +98,8 @@ static void console_finish_line(void)
             (parse_signed_int(&s_line_buf[i], (uint8_t)(s_line_len - i), &deg) != 0)) {
             BSP_UART_Printf("[DBG] bad angle, try 'g 47'\r\n");
         } else {
-            if (deg < 0)   deg = 0;
-            if (deg > 359) deg = 359;
+            if (deg < TASK_MOTION_ANGLE_MIN_DEG) deg = TASK_MOTION_ANGLE_MIN_DEG;
+            if (deg > TASK_MOTION_ANGLE_MAX_DEG) deg = TASK_MOTION_ANGLE_MAX_DEG;
             console_send_force((int16_t)deg, true);
         }
     }
@@ -180,13 +180,13 @@ static void console_poll(uint32_t tick_ms)
             break;
         case '+': {
             int32_t a = (int32_t)s_console_force_angle + 10;
-            if (a > 359) a = 359;
+            if (a > TASK_MOTION_ANGLE_MAX_DEG) a = TASK_MOTION_ANGLE_MAX_DEG;
             console_send_force((int16_t)a, true);
             break;
         }
         case '-': {
             int32_t a = (int32_t)s_console_force_angle - 10;
-            if (a < 0) a = 0;
+            if (a < TASK_MOTION_ANGLE_MIN_DEG) a = TASK_MOTION_ANGLE_MIN_DEG;
             console_send_force((int16_t)a, true);
             break;
         }
@@ -242,7 +242,7 @@ static void periodic_snapshot(void)
     DataHub_Read(&s);
     int16_t force_angle = 0;
     bool    force_on    = App_Control_GetForceState(&force_angle);
-    BSP_UART_Printf("[DBG] mode=%d arb=%d rc=%d vis=%d pos=%d tgt=%d load=%d%s\r\n",
+    BSP_UART_Printf("[DBG] mode=%d arb=%d rc=%d vis=%d pos=%d tgt=%d load=%d tx=%lu rx=%lu%s\r\n",
                     (int)s.current_mode,
                     (int)s.arbiter_reason_code,
                     (int)s.rc_link_up,
@@ -250,6 +250,8 @@ static void periodic_snapshot(void)
                     (int)s.servo_position_angle_deg,
                     (int)(force_on ? force_angle : s.servo_target_angle_deg),
                     (int)s.servo_load,
+                    (unsigned long)BSP_UART_Fsus_GetTxBytes(),
+                    (unsigned long)BSP_UART_Fsus_GetRxBytes(),
                     force_on ? " [FORCE]" : "");
 }
 
