@@ -14,6 +14,8 @@
 #include "bsp_uart.h"
 #include "dev_status.h"
 #include "task_motion.h"   /* TASK_MOTION_ANGLE_MIN_DEG / MAX_DEG */
+#include "task_rc.h"       /* TaskRc_CopyRawChannels */
+#include "task_arbiter.h"  /* ARB_REASON_* enum for human-readable [DBG] */
 
 #include "FreeRTOS.h"
 #include "task.h"
@@ -40,6 +42,8 @@ static char     s_line_buf[CONSOLE_LINE_MAX];
 static uint8_t  s_line_len = 0;
 static bool     s_line_active = false;   /* true after the user presses 'g' */
 
+static bool s_raw_dump_active = false;
+
 static void console_print_help(void)
 {
     BSP_UART_Printf(
@@ -49,6 +53,7 @@ static void console_print_help(void)
         "  1=goto 0  2=goto 90  3=goto 180\r\n"
         "  +=+10deg  -=-10deg\r\n"
         "  g <deg>=force to arbitrary angle, eg 'g 47<enter>'\r\n"
+        "  r=raw channel dump on/off\r\n"
         "  ?=this help\r\n");
 }
 
@@ -196,6 +201,11 @@ static void console_poll(uint32_t tick_ms)
             s_line_buf[s_line_len++] = 'g';
             BSP_UART_Printf("g");
             break;
+        case 'r':
+            s_raw_dump_active = !s_raw_dump_active;
+            BSP_UART_Printf("[DBG] raw channel dump %s\r\n",
+                            s_raw_dump_active ? "ON (1 Hz)" : "OFF");
+            break;
         case '?':
             console_print_help();
             break;
@@ -232,6 +242,52 @@ static void led_render(uint32_t tick_ms)
 
 static uint32_t s_snapshot_print_counter = 0U;
 
+static void raw_channel_dump(void)
+{
+    uint16_t ch[DRV_ELRS_MAX_CHANNELS];
+    AraStatus_t st = TaskRc_CopyRawChannels(ch, DRV_ELRS_MAX_CHANNELS);
+    if (st != ARA_OK) {
+        BSP_UART_Printf("[RC] link down, no data\r\n");
+        return;
+    }
+    BSP_UART_Printf("[RC] CH1=%5u CH2=%5u SA=%5u SC=%5u SF=%5u SB=%5u SD=%5u\r\n",
+                    (unsigned)ch[0],   /* CH1 main arm stick */
+                    (unsigned)ch[1],   /* CH2 gripper stick */
+                    (unsigned)ch[4],   /* CH5  SA mode */
+                    (unsigned)ch[6],   /* CH7  SC gripper switch */
+                    (unsigned)ch[7],   /* CH8  SF roll wheel */
+                    (unsigned)ch[8],   /* CH9  SB reset pulse */
+                    (unsigned)ch[9]);  /* CH10 SD e-stop */
+}
+
+static const char *mode_to_str(uint8_t m)
+{
+    switch (m) {
+    case ARA_MODE_INIT:   return "INIT  ";
+    case ARA_MODE_IDLE:   return "IDLE  ";
+    case ARA_MODE_MANUAL: return "MANUAL";
+    case ARA_MODE_AUTO:   return "AUTO  ";
+    case ARA_MODE_ERROR:  return "ERROR ";
+    default:              return "?     ";
+    }
+}
+
+static const char *reason_to_str(uint8_t r)
+{
+    switch (r) {
+    case ARB_REASON_BOOT:                return "BOOT       ";
+    case ARB_REASON_ESTOP_OPERATOR:      return "ESTOP_SD   ";
+    case ARB_REASON_ESTOP_RC_LOSS:       return "ESTOP_RCLOS";
+    case ARB_REASON_MANUAL_RC:           return "MANUAL_RC  ";
+    case ARB_REASON_AUTO_VISION_FRESH:   return "AUTO_FRESH ";
+    case ARB_REASON_AUTO_VISION_STALE:   return "AUTO_STALE ";
+    case ARB_REASON_IDLE_DEFAULT:        return "IDLE       ";
+    case ARB_REASON_SERVO_OFFLINE:       return "NO_SERVO   ";
+    case ARB_REASON_FAULT_PENDING_RESET: return "WAIT_RESET ";
+    default:                             return "?          ";
+    }
+}
+
 static void periodic_snapshot(void)
 {
     s_snapshot_print_counter++;
@@ -242,9 +298,9 @@ static void periodic_snapshot(void)
     DataHub_Read(&s);
     int16_t force_angle = 0;
     bool    force_on    = App_Control_GetForceState(&force_angle);
-    BSP_UART_Printf("[DBG] mode=%d arb=%d rc=%d vis=%d pos=%d tgt=%d load=%d tx=%lu rx=%lu%s\r\n",
-                    (int)s.current_mode,
-                    (int)s.arbiter_reason_code,
+    BSP_UART_Printf("[DBG] %s %s rc=%d vis=%d pos=%d tgt=%d load=%d tx=%lu rx=%lu erx=%lu rec=%lu%s\r\n",
+                    mode_to_str((uint8_t)s.current_mode),
+                    reason_to_str(s.arbiter_reason_code),
                     (int)s.rc_link_up,
                     (int)s.vision_link_up,
                     (int)s.servo_position_angle_deg,
@@ -252,7 +308,13 @@ static void periodic_snapshot(void)
                     (int)s.servo_load,
                     (unsigned long)BSP_UART_Fsus_GetTxBytes(),
                     (unsigned long)BSP_UART_Fsus_GetRxBytes(),
+                    (unsigned long)BSP_UART_Elrs_GetRxBytes(),
+                    (unsigned long)BSP_UART_RxDma_GetRecoveries(),
                     force_on ? " [FORCE]" : "");
+
+    if (s_raw_dump_active) {
+        raw_channel_dump();
+    }
 }
 
 /* =============================================================================

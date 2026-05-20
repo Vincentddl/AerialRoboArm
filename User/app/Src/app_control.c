@@ -52,6 +52,11 @@ static MotionState_t    s_mstate;
 static bool    s_force_active     = false;
 static int16_t s_force_angle_deg  = 0;
 
+/* Two-step reset latch. ControlTask owns this so arbiter can stay a pure
+ * function. Set to true when arbiter reports a latching fault (SD active,
+ * RC loss); cleared when arbiter signals fault_reset_consumed. */
+static bool    s_fault_latched    = false;
+
 /* =============================================================================
  * Helpers
  * ============================================================================= */
@@ -137,6 +142,10 @@ static void handle_debug_request(uint32_t now_ms)
     case DBG_REQ_FORCE_GOTO_ANGLE:
         if (req.arg2 < 0) {
             s_force_active = false;
+            /* Reseed incremental accumulator so RC takes over from current position. */
+            if (s_mstate.feedback_valid) {
+                TaskRc_ReseedIncremental((int16_t)s_mstate.feedback.angle_deg);
+            }
         } else {
             int32_t deg = req.arg1;
             if (deg < TASK_MOTION_ANGLE_MIN_DEG) deg = TASK_MOTION_ANGLE_MIN_DEG;
@@ -239,13 +248,11 @@ static void step_running_force(uint32_t now_ms)
 
     TaskMotion_Update(&s_mcmd, now_ms, &s_mstate);
 
-    TaskRc_Update(now_ms, &s_rc);
     TaskVision_Update(now_ms, &s_vis);
 }
 
 static void step_running_normal(uint32_t now_ms)
 {
-    TaskRc_Update(now_ms, &s_rc);
     TaskVision_Update(now_ms, &s_vis);
 
     ArbiterInput_t in = {
@@ -255,8 +262,18 @@ static void step_running_normal(uint32_t now_ms)
         .tick_ms         = now_ms,
         .prev_mode       = s_arb.mode,
         .vision_stale_ms = ARBITER_DEFAULT_VISION_STALE_MS,
+        .fault_latched   = s_fault_latched,
     };
     TaskArbiter_Decide(&in, &s_arb);
+
+    /* Two-step reset side effects: when arbiter consumes sys_reset_pulse,
+     * also reseed the CH1 incremental accumulator so MANUAL re-entry
+     * starts from a clean 0 instead of whatever the user steered to
+     * during the latched fault. */
+    if (s_arb.fault_reset_consumed) {
+        TaskRc_ReseedIncremental(0);
+    }
+    s_fault_latched = s_arb.fault_latched_next;
 
     TaskManipulator_Update(&s_arb, &s_mstate, now_ms, &s_mcmd);
 
@@ -286,6 +303,11 @@ static void ControlTaskEntry(void *arg)
         const uint32_t now_ms = osKernelGetTickCount();
 
         handle_debug_request(now_ms);
+
+        /* RC parsing must run every tick regardless of phase, so channel
+         * sniffing and link-health observation work even when servo
+         * bring-up fails (or no servo is attached during RC-only tests). */
+        TaskRc_Update(now_ms, &s_rc);
 
         switch (s_phase) {
         case CTRL_PHASE_BOOT:         step_boot(now_ms);    break;
@@ -330,6 +352,7 @@ void App_Control_InitDeps(void)
     s_phase          = CTRL_PHASE_BOOT;
     s_phase_enter_ms = 0U;
     s_heartbeat_ms   = 0U;
+    s_fault_latched  = false;
 }
 
 void App_Control_Init(void)

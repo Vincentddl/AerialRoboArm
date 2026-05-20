@@ -17,7 +17,7 @@
 
 /* --- Configuration --- */
 #define UART_DEBUG_RX_BUF_SIZE   (128U)
-#define UART_ELRS_RX_BUF_SIZE    (128U)
+#define UART_ELRS_RX_BUF_SIZE    (1024U)
 #define UART_FSUS_RX_BUF_SIZE    (256U)
 #define UART_TX_TIMEOUT_MS       (100U)
 
@@ -63,6 +63,8 @@ static char tx_buf[128];                // 发送缓冲区 (由信号量保护)
 /* Bring-up diagnostics: TX/RX byte counters visible to upper layers. */
 static volatile uint32_t s_fsus_tx_bytes = 0U;
 static volatile uint32_t s_fsus_rx_bytes = 0U;
+static volatile uint32_t s_elrs_rx_bytes = 0U;
+static volatile uint32_t s_uart_rx_dma_recoveries = 0U;
 
 /* =============================================================================
  * Half-Duplex transaction state (ST3215 / USART2)
@@ -106,6 +108,23 @@ static uint16_t GetDmaHead(BspUart_Dev_t dev) {
     if (head >= ctx->rx_buffer_size) head = 0;
 
     return head;
+}
+
+static void RestartCircularDmaRx(BspUart_Dev_t dev)
+{
+    if (dev >= BSP_UART_NUM) return;
+
+    UartContext_t *ctx = &uart_ctx[dev];
+    if (ctx->huart == NULL || ctx->rx_buffer == NULL ||
+        ctx->rx_buffer_size == 0U) {
+        return;
+    }
+
+    ctx->rx_tail_pos = 0U;
+    (void)HAL_UART_Receive_DMA(ctx->huart,
+                               ctx->rx_buffer,
+                               ctx->rx_buffer_size);
+    s_uart_rx_dma_recoveries++;
 }
 
 /* --- API Implementation --- */
@@ -226,6 +245,7 @@ uint16_t BSP_UART_Read(BspUart_Dev_t dev, uint8_t *p_data, uint16_t len)
     }
 
     ctx->rx_tail_pos = tail;
+
     return read_len;
 }
 
@@ -384,12 +404,23 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
         return;
     }
 
+    if (huart == uart_ctx[BSP_UART_ELRS].huart) {
+        s_elrs_rx_bytes += UART_ELRS_RX_BUF_SIZE / 2U;
+    }
+
     /* DEBUG / ELRS: legacy DMA ringbuffer-cplt notification path. */
     for (int i = 0; i < BSP_UART_NUM; i++) {
         if (huart == uart_ctx[i].huart && uart_ctx[i].rx_cplt_cb) {
             uart_ctx[i].rx_cplt_cb();
             break;
         }
+    }
+}
+
+void HAL_UART_RxHalfCpltCallback(UART_HandleTypeDef *huart)
+{
+    if (huart == uart_ctx[BSP_UART_ELRS].huart) {
+        s_elrs_rx_bytes += UART_ELRS_RX_BUF_SIZE / 2U;
     }
 }
 
@@ -425,6 +456,15 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
             xSemaphoreGiveFromISR(tx_sem, &hpw);
             portYIELD_FROM_ISR(hpw);
         }
+        RestartCircularDmaRx(BSP_UART_DEBUG);
+        return;
+    }
+
+    /* ELRS (USART1): STM32 HAL treats every UART error in DMA RX mode as
+     * blocking and aborts the RX DMA before calling this callback. Re-arm
+     * circular RX here so a transient FE/NE/ORE cannot permanently stall RC. */
+    if (huart == uart_ctx[BSP_UART_ELRS].huart) {
+        RestartCircularDmaRx(BSP_UART_ELRS);
         return;
     }
 }
@@ -463,3 +503,13 @@ void BSP_UART_Fsus_Flush(void)
 
 uint32_t BSP_UART_Fsus_GetTxBytes(void) { return s_fsus_tx_bytes; }
 uint32_t BSP_UART_Fsus_GetRxBytes(void) { return s_fsus_rx_bytes; }
+
+uint32_t BSP_UART_Elrs_GetRxBytes(void)
+{
+    return s_elrs_rx_bytes;
+}
+
+uint32_t BSP_UART_RxDma_GetRecoveries(void)
+{
+    return s_uart_rx_dma_recoveries;
+}

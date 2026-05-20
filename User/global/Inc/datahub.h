@@ -73,7 +73,8 @@ typedef enum {
     LED_PATTERN_IDLE_SLOW_BLINK,
     LED_PATTERN_MANUAL_HEARTBEAT,  /**< Short pulse every 500 ms. */
     LED_PATTERN_AUTO_SOLID,
-    LED_PATTERN_ERROR_SOS          /**< Fault / E-Stop / link loss. */
+    LED_PATTERN_ERROR_SOS,         /**< Fault / E-Stop / link loss. */
+    LED_PATTERN_FAULT_PENDING_RESET /**< Fault cleared, waiting SB reset. */
 } AraLedPattern_t;
 
 /* =============================================================================
@@ -88,9 +89,10 @@ typedef struct {
     AraGripperCmd_t gripper_cmd;
     bool            sys_reset_pulse; /**< Edge-triggered SB pulse. */
     uint16_t        aux_knob_val;    /**< SF, normalised [0, 1000]. */
-    int16_t         ch1_percent;     /**< CH1 analog -100..+100, for manual angle. */
-    uint8_t         roll_degree;     /**< CH3 mapped to 0..180 degrees. */
-    uint8_t         gripper_angle;   /**< SF mapped to 0..180 degrees. */
+    int16_t         ch1_percent;           /**< CH1 analog -100..+100, for manual angle. */
+    int16_t         incremental_angle_deg; /**< Incremental target accumulated by CH1 steps. */
+    uint8_t         roll_degree;           /**< CH8 wheel mapped to 0..180 degrees. */
+    uint8_t         gripper_angle;         /**< CH2 spring axis mapped to 0..180 degrees. */
 } RcControlData_t;
 
 /* =============================================================================

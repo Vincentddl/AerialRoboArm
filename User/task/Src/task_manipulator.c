@@ -23,6 +23,7 @@ static void enter_state(ManipulatorState_t s, uint32_t tick_ms)
 void TaskManipulator_Init(void)
 {
     memset(&s_ctx, 0, sizeof(s_ctx));
+    (void)ModActuator_Init(&s_ctx.actuator);
     s_ctx.current_state         = MANIP_STATE_BOOT;
     s_ctx.last_target_angle_deg = 0.0f;
 }
@@ -69,6 +70,9 @@ void TaskManipulator_Update(const ArbiterOutput_t *arb,
     if (s_ctx.current_state == MANIP_STATE_BOOT) {
         enter_state(MANIP_STATE_IDLE, tick_ms);
     }
+
+    (void)ModActuator_SetRoll(&s_ctx.actuator, arb->roll_degree);
+    (void)ModActuator_SetGripperAngle(&s_ctx.actuator, arb->gripper_angle);
 
     switch (arb->mode) {
     case ARA_MODE_MANUAL:

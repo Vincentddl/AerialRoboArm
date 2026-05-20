@@ -39,7 +39,7 @@ void BSP_PWM_SetServoPulse(BspServo_Dev_t servo, uint16_t us)
 {
     if (servo >= BSP_SERVO_NUM) return;
 
-    /* Standard hobby-servo pulse range is 500-2500 us. */
+    /* PTK 7350MG-D range: 500-2500 us at a 333 Hz PWM frame. */
     if (us < 500)  us = 500;
     if (us > 2500) us = 2500;
 

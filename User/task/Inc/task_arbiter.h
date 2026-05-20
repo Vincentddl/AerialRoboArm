@@ -13,11 +13,13 @@
  * rules visible in one place.
  *
  * Priority ladder (high to low):
- *   1. E-Stop (operator or RC-loss-in-AUTO)
- *   2. MANUAL mode (RC intent)
- *   3. AUTO mode with fresh vision (vision intent)
- *   4. AUTO mode with stale vision (park hold)
- *   5. IDLE default
+ *   1. Operator E-Stop via SD (latched)
+ *   2. RC link loss (latched)
+ *   3. Servo offline (not latched; bring-up owns recovery)
+ *   4. Latched fault reset via SB, only after SD is released
+ *   5. MANUAL mode (RC intent)
+ *   6. AUTO mode with fresh/stale vision
+ *   7. IDLE default
  */
 
 #ifndef TASK_ARBITER_H
@@ -31,14 +33,15 @@
  * ========================================================================== */
 
 typedef enum {
-    ARB_REASON_BOOT              = 0,
-    ARB_REASON_ESTOP_OPERATOR    = 1,
-    ARB_REASON_ESTOP_RC_LOSS     = 2,
-    ARB_REASON_MANUAL_RC         = 3,
-    ARB_REASON_AUTO_VISION_FRESH = 4,
-    ARB_REASON_AUTO_VISION_STALE = 5,
-    ARB_REASON_IDLE_DEFAULT      = 6,
-    ARB_REASON_SERVO_OFFLINE     = 7
+    ARB_REASON_BOOT                = 0,
+    ARB_REASON_ESTOP_OPERATOR      = 1,
+    ARB_REASON_ESTOP_RC_LOSS       = 2,
+    ARB_REASON_MANUAL_RC           = 3,
+    ARB_REASON_AUTO_VISION_FRESH   = 4,
+    ARB_REASON_AUTO_VISION_STALE   = 5,
+    ARB_REASON_IDLE_DEFAULT        = 6,
+    ARB_REASON_SERVO_OFFLINE       = 7,
+    ARB_REASON_FAULT_PENDING_RESET = 8
 } ArbiterReason_t;
 
 /* ============================================================================
@@ -54,6 +57,9 @@ typedef struct {
     AraSysMode_t            prev_mode;
     /** Vision freshness window in ms. Past this, AUTO falls back to park. */
     uint32_t                vision_stale_ms;
+    /** Caller-owned latch state from previous tick. When true, arbiter
+     *  refuses to leave ERROR until rc->sys_reset_pulse is observed. */
+    bool                    fault_latched;
 } ArbiterInput_t;
 
 typedef struct {
@@ -69,8 +75,18 @@ typedef struct {
     uint8_t           target_acc;
     AraGripperCmd_t   gripper_cmd;
     uint8_t           roll_degree;
+    uint8_t           gripper_angle;
     AraLedPattern_t   led_pattern;
     ArbiterReason_t   reason_code;
+    /** Latch state caller should persist for next tick. Mirrors the
+     *  two-step reset semantic: SD-active / RC-loss set this true; only
+     *  rc->sys_reset_pulse can clear it (see fault_reset_consumed). */
+    bool              fault_latched_next;
+    /** True for exactly the tick that consumed sys_reset_pulse and left
+     *  the latched ERROR state. Caller uses this to trigger side effects
+     *  (e.g. reseed CH1 incremental accumulator) that arbiter cannot do
+     *  itself while remaining a pure function. */
+    bool              fault_reset_consumed;
 } ArbiterOutput_t;
 
 /* ============================================================================

@@ -16,6 +16,7 @@
 
 #include "ara_def.h"
 #include "datahub.h"
+#include "mod_actuator.h"
 #include "task_arbiter.h"
 #include "task_motion.h"
 
@@ -36,6 +37,7 @@ typedef struct {
     ManipulatorState_t current_state;
     uint32_t           state_enter_ms;
     float              last_target_angle_deg;
+    ModActuator_Context_t actuator;
 } TaskManipulator_Context_t;
 
 /* ============================================================================

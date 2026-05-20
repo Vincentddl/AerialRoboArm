@@ -85,6 +85,18 @@ void BSP_UART_Fsus_Flush(void);
 uint32_t BSP_UART_Fsus_GetTxBytes(void);
 uint32_t BSP_UART_Fsus_GetRxBytes(void);
 
+/**
+ * @brief Bring-up diagnostics: cumulative bytes received on USART1 (ELRS)
+ *        DMA ring buffer. Non-zero means the DMA channel is seeing data.
+ */
+uint32_t BSP_UART_Elrs_GetRxBytes(void);
+
+/**
+ * @brief Bring-up diagnostics: number of circular RX DMA restarts after UART
+ *        errors on DMA-backed ports.
+ */
+uint32_t BSP_UART_RxDma_GetRecoveries(void);
+
 /* =============================================================================
  * Half-Duplex API (legacy, ST3215 — kept for reference, not called currently)
  * ============================================================================= */
