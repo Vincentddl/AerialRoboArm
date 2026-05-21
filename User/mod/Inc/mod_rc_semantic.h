@@ -44,6 +44,14 @@
  */
 #define MOD_RC_CH1_EXIT_HOLD_ABS_PCT (35)
 
+/**
+ * @brief CH2 gripper center deadband (raw counts). Spring-centered stick
+ *        rests around RAW_MID with mild ADC noise. ±30 raw ≈ ±3.3 deg
+ *        of stick travel — small enough to feel 1:1, large enough to
+ *        suppress visible jitter when idle.
+ */
+#define MOD_RC_CH2_CENTER_DEADBAND_RAW (30U)
+
 /* Channel Mapping Indices (CRSF array is 0-indexed) */
 #define MOD_RC_IDX_CH1 0U  /**< CH1: Stick RX axis (main arm incremental intent). */
 #define MOD_RC_IDX_CH2 1U  /**< CH2: Spring-centered gripper servo axis. */

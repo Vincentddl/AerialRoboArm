@@ -298,7 +298,7 @@ static void periodic_snapshot(void)
     DataHub_Read(&s);
     int16_t force_angle = 0;
     bool    force_on    = App_Control_GetForceState(&force_angle);
-    BSP_UART_Printf("[DBG] %s %s rc=%d vis=%d pos=%d tgt=%d load=%d tx=%lu rx=%lu erx=%lu rec=%lu%s\r\n",
+    BSP_UART_Printf("[DBG] %s %s rc=%d vis=%d pos=%d tgt=%d load=%d roll=%3u grip=%3u tx=%lu rx=%lu erx=%lu rec=%lu%s\r\n",
                     mode_to_str((uint8_t)s.current_mode),
                     reason_to_str(s.arbiter_reason_code),
                     (int)s.rc_link_up,
@@ -306,6 +306,8 @@ static void periodic_snapshot(void)
                     (int)s.servo_position_angle_deg,
                     (int)(force_on ? force_angle : s.servo_target_angle_deg),
                     (int)s.servo_load,
+                    (unsigned)s.end_roll_deg,
+                    (unsigned)s.end_gripper_deg,
                     (unsigned long)BSP_UART_Fsus_GetTxBytes(),
                     (unsigned long)BSP_UART_Fsus_GetRxBytes(),
                     (unsigned long)BSP_UART_Elrs_GetRxBytes(),

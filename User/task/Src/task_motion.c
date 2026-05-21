@@ -255,6 +255,25 @@ void TaskMotion_Update(const MotionCmd_t *cmd,
     }
     memset(state, 0, sizeof(*state));
 
+#if TASK_MOTION_SKIP_PING_FOR_BENCH
+    /* Bench mode short-circuit: HX8 / UC01 not powered. Pretend the main
+     * arm is online and silently swallow any motion command so the rest of
+     * the FSM (arbiter, manipulator) is allowed to drive PA0/PA1 PTK
+     * end-effectors. We do NOT touch the FSUS bus here. */
+    (void)cmd;
+    state->last_write_result = FSUS_PARSE_OK;
+    state->last_read_result  = FSUS_PARSE_OK;
+    state->feedback.servo_id     = TASK_MOTION_SERVO_ID;
+    state->feedback.angle_deg    = 0.0f;
+    state->feedback.timestamp_ms = tick_ms;
+    state->feedback_valid    = true;
+    state->servo_online      = true;
+    state->is_moving         = false;
+    state->is_stalled        = false;
+    state->is_overload       = false;
+    return;
+#endif
+
     float target_deg = map_angle_to_fsus(cmd->target_angle_deg);
 
     /* --- Torque transition ---

@@ -139,6 +139,20 @@ static uint8_t map_analog_degree(uint16_t ch_val)
     return (uint8_t)((value * 180U) / range);
 }
 
+/**
+ * @brief  Map an analog channel to degree, snapping near-center to 90 deg.
+ *         Use for spring-centered sticks that exhibit ADC jitter when idle.
+ */
+static uint8_t map_analog_degree_centered(uint16_t ch_val, uint16_t deadband_raw)
+{
+    int32_t delta = (int32_t)ch_val - (int32_t)MOD_RC_VAL_MID;
+    if (delta < 0) delta = -delta;
+    if (delta < (int32_t)deadband_raw) {
+        return 90U;
+    }
+    return map_analog_degree(ch_val);
+}
+
 /* =========================================================
  * API Implementation
  * ========================================================= */
@@ -216,7 +230,8 @@ AraStatus_t ModRcSemantic_Process(ModRcSemantic_Context_t *p_ctx,
     ch1_pct = map_ch1_percent((int16_t)channels[MOD_RC_IDX_CH1]);
     out_data->ch1_percent = ch1_pct;
     out_data->roll_degree = map_analog_degree(channels[MOD_RC_IDX_SF]);
-    out_data->gripper_angle = map_analog_degree(channels[MOD_RC_IDX_CH2]);
+    out_data->gripper_angle = map_analog_degree_centered(channels[MOD_RC_IDX_CH2],
+                                                          MOD_RC_CH2_CENTER_DEADBAND_RAW);
 
     /* ---------------- CH1 incremental stepping ---------------- */
     {
@@ -334,7 +349,8 @@ AraStatus_t ModRcSemantic_ProcessDebugAnalog(ModRcSemantic_Context_t *p_ctx,
     out_data->sys_reset_pulse = update_sb_reset_pulse(p_ctx, sb_now, current_tick_ms);
 
     out_data->roll_angle = map_analog_degree(channels[MOD_RC_IDX_SF]);
-    out_data->gripper_angle = map_analog_degree(channels[MOD_RC_IDX_CH2]);
+    out_data->gripper_angle = map_analog_degree_centered(channels[MOD_RC_IDX_CH2],
+                                                          MOD_RC_CH2_CENTER_DEADBAND_RAW);
 
     return ARA_OK;
 }

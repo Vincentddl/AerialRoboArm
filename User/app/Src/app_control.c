@@ -98,6 +98,8 @@ static void publish_hub(uint32_t now_ms, uint32_t loop_count)
     snap.servo_target_speed       = s_arb.target_speed;
     snap.servo_target_acc         = s_arb.target_acc;
     snap.servo_torque_request     = s_arb.torque_request;
+    snap.end_roll_deg             = s_arb.roll_degree;
+    snap.end_gripper_deg          = s_arb.gripper_angle;
 
     if (s_mstate.feedback_valid) {
         snap.servo_position_angle_deg = (int16_t)s_mstate.feedback.angle_deg;
@@ -180,6 +182,11 @@ static void step_ping(uint32_t now_ms)
 #if TASK_MOTION_USE_MOCK
     /* Mock mode: skip right through to RUNNING. */
     enter_phase(CTRL_PHASE_RUNNING, now_ms);
+#elif TASK_MOTION_SKIP_PING_FOR_BENCH
+    /* Bench mode: HX8 / UC01 not powered, only PTK end-effector under test.
+     * Pretend main arm is reachable so manipulator FSM is allowed to drive
+     * PA0/PA1. Caller must NOT issue MANUAL/AUTO motion commands. */
+    enter_phase(CTRL_PHASE_SERVO_CONFIG, now_ms);
 #else
     /* Real mode: probe servo via TaskMotion_Update (ServoMonitor read). */
     MotionCmd_t probe = {

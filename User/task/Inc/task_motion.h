@@ -24,6 +24,17 @@
 #define TASK_MOTION_USE_MOCK            (0)
 #endif
 
+/**
+ * @brief When set, the bring-up FSM skips the FSUS ping and pretends the
+ *        main-arm servo is online. Use this **only** when bench-testing the
+ *        PA0/PA1 PTK end-effector servos without the HX8 / UC01 powered up.
+ *        With this on, do NOT command the main arm — fault detection is
+ *        disabled. Turn back to 0 before any flight bring-up.
+ */
+#ifndef TASK_MOTION_SKIP_PING_FOR_BENCH
+#define TASK_MOTION_SKIP_PING_FOR_BENCH (1)
+#endif
+
 #define TASK_MOTION_SERVO_ID            (0U)    /**< Default FSUS servo ID. */
 
 #define TASK_MOTION_ANGLE_MIN_DEG       (-180)  /**< FSUS native: signed, [-180,+180]. */

@@ -130,6 +130,8 @@ typedef struct {
     uint16_t          servo_target_speed;
     uint8_t           servo_target_acc;
     bool              servo_torque_request;
+    uint8_t           end_roll_deg;          /**< Commanded PA1 roll, 0..180. */
+    uint8_t           end_gripper_deg;       /**< Commanded PA0 gripper, 0..180. */
 
     /* --- Servo feedback side --- */
     int16_t           servo_position_steps;

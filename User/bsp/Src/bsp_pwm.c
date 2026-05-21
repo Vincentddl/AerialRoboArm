@@ -28,9 +28,14 @@ static const ServoConfig_t servo_map[BSP_SERVO_NUM] = {
 
 void BSP_PWM_Init(void)
 {
-    /* TIM2 is a general-purpose timer, MOE not required. Channels are
-     * started lazily on the first BSP_PWM_SetServoPulse() call so a
-     * miswired channel does not generate spurious pulses at boot. */
+    /* Pre-load both channels to ~90 deg neutral (1500us pulse) BEFORE
+     * starting PWM. Without this, the compare registers default to 0,
+     * giving a 0us pulse during boot / ERROR phases (when manipulator
+     * short-circuits and never writes a valid command). PTK-class digital
+     * servos interpret 0us as garbage and spin uncontrollably. */
+    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 1500);
+    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, 1500);
+
     HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
     HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2);
 }
