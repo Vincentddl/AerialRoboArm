@@ -32,7 +32,7 @@
  *        disabled. Turn back to 0 before any flight bring-up.
  */
 #ifndef TASK_MOTION_SKIP_PING_FOR_BENCH
-#define TASK_MOTION_SKIP_PING_FOR_BENCH (1)
+#define TASK_MOTION_SKIP_PING_FOR_BENCH (0)
 #endif
 
 #define TASK_MOTION_SERVO_ID            (0U)    /**< Default FSUS servo ID. */
@@ -40,10 +40,10 @@
 #define TASK_MOTION_ANGLE_MIN_DEG       (-180)  /**< FSUS native: signed, [-180,+180]. */
 #define TASK_MOTION_ANGLE_MAX_DEG       (180)
 
-#define TASK_MOTION_DEFAULT_VELOCITY    (300.0f)/**< deg/s, bring-up safe. */
-#define TASK_MOTION_DEFAULT_T_ACC_MS    (100U)  /**< Acceleration time. */
-#define TASK_MOTION_DEFAULT_T_DEC_MS    (100U)  /**< Deceleration time. */
-#define TASK_MOTION_DEFAULT_POWER_MW    (1000U) /**< Default execution power. */
+#define TASK_MOTION_DEFAULT_VELOCITY    (750.0f)/**< deg/s, FSUS protocol max. */
+#define TASK_MOTION_DEFAULT_T_ACC_MS    (20U)   /**< Acceleration time, protocol min. */
+#define TASK_MOTION_DEFAULT_T_DEC_MS    (20U)   /**< Deceleration time, protocol min. */
+#define TASK_MOTION_DEFAULT_POWER_MW    (0U)    /**< 0 = servo auto-calc. */
 
 /* ============================================================================
  * Command / state types

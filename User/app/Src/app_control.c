@@ -274,11 +274,12 @@ static void step_running_normal(uint32_t now_ms)
     TaskArbiter_Decide(&in, &s_arb);
 
     /* Two-step reset side effects: when arbiter consumes sys_reset_pulse,
-     * also reseed the CH1 incremental accumulator so MANUAL re-entry
-     * starts from a clean 0 instead of whatever the user steered to
-     * during the latched fault. */
+     * reseed CH1 incremental accumulator to current servo position so
+     * MANUAL re-entry starts from wherever the arm physically is. */
     if (s_arb.fault_reset_consumed) {
-        TaskRc_ReseedIncremental(0);
+        int16_t cur = s_mstate.feedback_valid
+                      ? (int16_t)s_mstate.feedback.angle_deg : 0;
+        TaskRc_ReseedIncremental(cur);
     }
     s_fault_latched = s_arb.fault_latched_next;
 
