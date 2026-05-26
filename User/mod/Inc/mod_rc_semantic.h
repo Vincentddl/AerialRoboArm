@@ -45,16 +45,16 @@
 #define MOD_RC_CH1_EXIT_HOLD_ABS_PCT (35)
 
 /**
- * @brief CH2 gripper center deadband (raw counts). Spring-centered stick
+ * @brief CH4 gripper center deadband (raw counts). Spring-centered stick
  *        rests around RAW_MID with mild ADC noise. ±30 raw ≈ ±3.3 deg
  *        of stick travel — small enough to feel 1:1, large enough to
  *        suppress visible jitter when idle.
  */
-#define MOD_RC_CH2_CENTER_DEADBAND_RAW (30U)
+#define MOD_RC_CH4_CENTER_DEADBAND_RAW (30U)
 
 /* Channel Mapping Indices (CRSF array is 0-indexed) */
 #define MOD_RC_IDX_CH1 0U  /**< CH1: Stick RX axis (main arm incremental intent). */
-#define MOD_RC_IDX_CH2 1U  /**< CH2: Spring-centered gripper servo axis. */
+#define MOD_RC_IDX_CH4 3U  /**< CH4: Spring-centered gripper servo axis (isolated from CH1/CH2 cross-talk). */
 #define MOD_RC_IDX_SA  4U  /**< CH5: Mode request switch (2-pos). */
 #define MOD_RC_IDX_SC  6U  /**< CH7: Gripper switch (3-pos). */
 #define MOD_RC_IDX_SF  7U  /**< CH8: Roll attitude wheel. */
@@ -87,7 +87,7 @@ typedef struct {
 
     /* --- 新增：专门用于标定的绝对角度语义 --- */
     uint8_t  roll_angle;       /**< Mapped from CH8 / SF wheel, [0, 180] deg. */
-    uint8_t  gripper_angle;    /**< Mapped from CH2 spring axis, [0, 180] deg. */
+    uint8_t  gripper_angle;    /**< Mapped from CH4 spring axis, [0, 180] deg. */
 } RcDebugAnalogData_t;
 
 /* =========================================================

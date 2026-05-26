@@ -92,7 +92,7 @@ typedef struct {
     int16_t         ch1_percent;           /**< CH1 analog -100..+100, for manual angle. */
     int16_t         incremental_angle_deg; /**< Incremental target accumulated by CH1 steps. */
     uint8_t         roll_degree;           /**< CH8 wheel mapped to 0..180 degrees. */
-    uint8_t         gripper_angle;         /**< CH2 spring axis mapped to 0..180 degrees. */
+    uint8_t         gripper_angle;         /**< CH4 spring axis mapped to 0..180 degrees. */
 } RcControlData_t;
 
 /* =============================================================================

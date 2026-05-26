@@ -250,9 +250,9 @@ static void raw_channel_dump(void)
         BSP_UART_Printf("[RC] link down, no data\r\n");
         return;
     }
-    BSP_UART_Printf("[RC] CH1=%5u CH2=%5u SA=%5u SC=%5u SF=%5u SB=%5u SD=%5u\r\n",
+    BSP_UART_Printf("[RC] CH1=%5u CH4=%5u SA=%5u SC=%5u SF=%5u SB=%5u SD=%5u\r\n",
                     (unsigned)ch[0],   /* CH1 main arm stick */
-                    (unsigned)ch[1],   /* CH2 gripper stick */
+                    (unsigned)ch[3],   /* CH4 gripper stick */
                     (unsigned)ch[4],   /* CH5  SA mode */
                     (unsigned)ch[6],   /* CH7  SC gripper switch */
                     (unsigned)ch[7],   /* CH8  SF roll wheel */

@@ -230,8 +230,8 @@ AraStatus_t ModRcSemantic_Process(ModRcSemantic_Context_t *p_ctx,
     ch1_pct = map_ch1_percent((int16_t)channels[MOD_RC_IDX_CH1]);
     out_data->ch1_percent = ch1_pct;
     out_data->roll_degree = map_analog_degree(channels[MOD_RC_IDX_SF]);
-    out_data->gripper_angle = map_analog_degree_centered(channels[MOD_RC_IDX_CH2],
-                                                          MOD_RC_CH2_CENTER_DEADBAND_RAW);
+    out_data->gripper_angle = map_analog_degree_centered(channels[MOD_RC_IDX_CH4],
+                                                          MOD_RC_CH4_CENTER_DEADBAND_RAW);
 
     /* ---------------- CH1 incremental stepping ---------------- */
     {
@@ -349,8 +349,8 @@ AraStatus_t ModRcSemantic_ProcessDebugAnalog(ModRcSemantic_Context_t *p_ctx,
     out_data->sys_reset_pulse = update_sb_reset_pulse(p_ctx, sb_now, current_tick_ms);
 
     out_data->roll_angle = map_analog_degree(channels[MOD_RC_IDX_SF]);
-    out_data->gripper_angle = map_analog_degree_centered(channels[MOD_RC_IDX_CH2],
-                                                          MOD_RC_CH2_CENTER_DEADBAND_RAW);
+    out_data->gripper_angle = map_analog_degree_centered(channels[MOD_RC_IDX_CH4],
+                                                          MOD_RC_CH4_CENTER_DEADBAND_RAW);
 
     return ARA_OK;
 }
