@@ -52,7 +52,9 @@ static void console_print_help(void)
         "  e=force ON (lock 0deg)    k=force OFF\r\n"
         "  1=goto 0  2=goto 90  3=goto 180\r\n"
         "  +=+10deg  -=-10deg\r\n"
-        "  g <deg>=force to arbitrary angle, eg 'g 47<enter>'\r\n"
+        "  g <deg>=force HX8 to arbitrary angle, eg 'g 47<enter>'\r\n"
+        "  p <ch> <deg>=lock PTK (ch 0=grip,1=roll; deg 0..180; -1=release)\r\n"
+        "  P=release both PTK channels back to RC\r\n"
         "  r=raw channel dump on/off\r\n"
         "  ?=this help\r\n");
 }
@@ -90,12 +92,19 @@ static int parse_signed_int(const char *s, uint8_t len, int32_t *out)
 
 static void console_finish_line(void)
 {
-    /* The line is expected to start with 'g' followed by whitespace and
-     * a signed decimal angle. Any deviation just resets the buffer with
-     * a brief error. */
-    if ((s_line_len < 2U) || (s_line_buf[0] != 'g')) {
-        BSP_UART_Printf("[DBG] bad cmd, try 'g <angle>'\r\n");
-    } else {
+    /* Two recognised line commands:
+     *   g <angle>          → HX8 force-goto
+     *   p <ch> <deg|-1>    → PTK end-effector force (ch: 0=PA0 grip, 1=PA1 roll;
+     *                        deg 0..180 lock, -1 release)
+     */
+    if (s_line_len < 2U) {
+        BSP_UART_Printf("[DBG] bad cmd\r\n");
+        s_line_len    = 0U;
+        s_line_active = false;
+        return;
+    }
+
+    if (s_line_buf[0] == 'g') {
         uint8_t i = 1U;
         while ((i < s_line_len) && (s_line_buf[i] == ' ')) i++;
         int32_t deg;
@@ -107,7 +116,33 @@ static void console_finish_line(void)
             if (deg > TASK_MOTION_ANGLE_MAX_DEG) deg = TASK_MOTION_ANGLE_MAX_DEG;
             console_send_force((int16_t)deg, true);
         }
+    } else if (s_line_buf[0] == 'p') {
+        uint8_t i = 1U;
+        while ((i < s_line_len) && (s_line_buf[i] == ' ')) i++;
+        if (i >= s_line_len || (s_line_buf[i] != '0' && s_line_buf[i] != '1')) {
+            BSP_UART_Printf("[DBG] bad ch, try 'p 0 90' (0=grip,1=roll)\r\n");
+        } else {
+            int32_t ch = s_line_buf[i] - '0';
+            i++;
+            while ((i < s_line_len) && (s_line_buf[i] == ' ')) i++;
+            int32_t deg;
+            if ((i >= s_line_len) ||
+                (parse_signed_int(&s_line_buf[i], (uint8_t)(s_line_len - i), &deg) != 0)) {
+                BSP_UART_Printf("[DBG] bad deg, try 'p 0 90' or 'p 1 -1'\r\n");
+            } else {
+                DebugRequest_Post(DBG_REQ_FORCE_PTK_ANGLE, ch, deg);
+                if (deg < 0) {
+                    BSP_UART_Printf("[DBG] PTK ch=%ld released to RC\r\n", (long)ch);
+                } else {
+                    BSP_UART_Printf("[DBG] PTK ch=%ld locked to %ld deg\r\n",
+                                    (long)ch, (long)deg);
+                }
+            }
+        }
+    } else {
+        BSP_UART_Printf("[DBG] bad cmd, try 'g <angle>' or 'p <ch> <deg>'\r\n");
     }
+
     s_line_len    = 0U;
     s_line_active = false;
 }
@@ -165,7 +200,8 @@ static void console_poll(uint32_t tick_ms)
              * operator can step from there with +/-/1/2/3/g. */
             DataHub_t hub;
             DataHub_Read(&hub);
-            int32_t cur = hub.servo_position_angle_deg;
+            int32_t raw = hub.servo_position_angle_deg;
+            int32_t cur = (raw >= 0) ? (raw + 5) / 10 : (raw - 5) / 10;
             if (cur < TASK_MOTION_ANGLE_MIN_DEG) cur = TASK_MOTION_ANGLE_MIN_DEG;
             if (cur > TASK_MOTION_ANGLE_MAX_DEG) cur = TASK_MOTION_ANGLE_MAX_DEG;
             console_send_force((int16_t)cur, true);
@@ -200,6 +236,17 @@ static void console_poll(uint32_t tick_ms)
             s_line_len    = 0U;
             s_line_buf[s_line_len++] = 'g';
             BSP_UART_Printf("g");
+            break;
+        case 'p':
+            s_line_active = true;
+            s_line_len    = 0U;
+            s_line_buf[s_line_len++] = 'p';
+            BSP_UART_Printf("p");
+            break;
+        case 'P':
+            DebugRequest_Post(DBG_REQ_FORCE_PTK_ANGLE, 0, -1);
+            DebugRequest_Post(DBG_REQ_FORCE_PTK_ANGLE, 1, -1);
+            BSP_UART_Printf("[DBG] PTK released (both ch back to RC)\r\n");
             break;
         case 'r':
             s_raw_dump_active = !s_raw_dump_active;
@@ -298,13 +345,26 @@ static void periodic_snapshot(void)
     DataHub_Read(&s);
     int16_t force_angle = 0;
     bool    force_on    = App_Control_GetForceState(&force_angle);
-    BSP_UART_Printf("[DBG] %s %s rc=%d vis=%d pos=%d tgt=%d load=%d roll=%3u grip=%3u tx=%lu rx=%lu erx=%lu rec=%lu%s\r\n",
+
+    int32_t pos_raw = (int32_t)s.servo_position_angle_deg;
+    bool    pos_neg = (pos_raw < 0);
+    int32_t pos_abs = pos_neg ? -pos_raw : pos_raw;
+    int32_t pos_int = pos_abs / 10;
+    int32_t pos_frc = pos_abs % 10;
+
+    int32_t tgt_raw = force_on ? ((int32_t)force_angle * 10) : (int32_t)s.servo_target_angle_deg;
+    bool    tgt_neg = (tgt_raw < 0);
+    int32_t tgt_abs = tgt_neg ? -tgt_raw : tgt_raw;
+    int32_t tgt_int = tgt_abs / 10;
+    int32_t tgt_frc = tgt_abs % 10;
+
+    BSP_UART_Printf("[DBG] %s %s rc=%d vis=%d pos=%s%d.%d tgt=%s%d.%d load=%d roll=%3u grip=%3u tx=%lu rx=%lu erx=%lu rec=%lu%s\r\n",
                     mode_to_str((uint8_t)s.current_mode),
                     reason_to_str(s.arbiter_reason_code),
                     (int)s.rc_link_up,
                     (int)s.vision_link_up,
-                    (int)s.servo_position_angle_deg,
-                    (int)(force_on ? force_angle : s.servo_target_angle_deg),
+                    pos_neg ? "-" : "", (int)pos_int, (int)pos_frc,
+                    tgt_neg ? "-" : "", (int)tgt_int, (int)tgt_frc,
                     (int)s.servo_load,
                     (unsigned)s.end_roll_deg,
                     (unsigned)s.end_gripper_deg,

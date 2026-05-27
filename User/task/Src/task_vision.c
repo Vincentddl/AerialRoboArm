@@ -1,9 +1,13 @@
 /**
  * @file task_vision.c
- * @brief Mock-only vision runnable for demo_v7. Real driver deferred.
+ * @brief Vision runnable for demo_v7.
  */
 
 #include "task_vision.h"
+
+#if TASK_VISION_USE_H13
+#include "drv_h13.h"
+#endif
 
 #include "FreeRTOS.h"
 #include "task.h"
@@ -23,6 +27,10 @@ void TaskVision_Init(void)
     s_vision.mock_expires_ms  = 0U;
     s_vision.mock_injected_ms = 0U;
     taskEXIT_CRITICAL();
+
+#if TASK_VISION_USE_H13
+    DrvH13_Init();
+#endif
 }
 
 void TaskVision_MockInjectTarget(int16_t  angle_deg,
@@ -52,6 +60,18 @@ void TaskVision_Update(uint32_t tick_ms, VisionIntent_t *out)
     if (out == NULL) {
         return;
     }
+
+#if TASK_VISION_USE_H13
+    H13VisionSample_t h13;
+    if (DrvH13_PollVision(tick_ms, &h13)) {
+        out->target_present       = h13.target_present;
+        out->target_angle_deg     = h13.target_angle_deg;
+        out->target_speed         = h13.target_speed;
+        out->confidence           = h13.confidence;
+        out->last_update_tick_ms  = h13.timestamp_ms;
+        return;
+    }
+#endif
 
     bool     active    = false;
     int16_t  angle     = 0;

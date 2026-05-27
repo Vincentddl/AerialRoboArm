@@ -4,10 +4,8 @@
  *
  * Produces VisionIntent_t samples for the Arbiter.
  *
- * demo_v7 default implementation is Mock-only: Console (via DebugRequest
- * DBG_REQ_MOCK_VISION_TARGET) injects a synthetic target with a lifetime;
- * the Mock automatically expires the target after duration_ms. Real vision
- * driver is deferred to post-demo_v7 (CRSF telemetry side-channel candidate).
+ * demo_v7 default implementation is Mock-only. H13/HC-13 vision input can be
+ * enabled at compile time with TASK_VISION_USE_H13 once a UART is available.
  */
 
 #ifndef TASK_VISION_H
@@ -15,6 +13,10 @@
 
 #include "ara_def.h"
 #include "datahub.h"
+
+#ifndef TASK_VISION_USE_H13
+#define TASK_VISION_USE_H13 (0)
+#endif
 
 /**
  * @brief Initialise the vision runnable (resets Mock state).

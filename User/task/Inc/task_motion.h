@@ -32,7 +32,7 @@
  *        disabled. Turn back to 0 before any flight bring-up.
  */
 #ifndef TASK_MOTION_SKIP_PING_FOR_BENCH
-#define TASK_MOTION_SKIP_PING_FOR_BENCH (0)
+#define TASK_MOTION_SKIP_PING_FOR_BENCH (1)
 #endif
 
 #define TASK_MOTION_SERVO_ID            (0U)    /**< Default FSUS servo ID. */

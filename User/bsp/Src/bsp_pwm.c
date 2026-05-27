@@ -28,13 +28,13 @@ static const ServoConfig_t servo_map[BSP_SERVO_NUM] = {
 
 void BSP_PWM_Init(void)
 {
-    /* Pre-load both channels to ~90 deg neutral (1500us pulse) BEFORE
-     * starting PWM. Without this, the compare registers default to 0,
+    /* Pre-load both channels to ~90 deg neutral (1520us pulse for PTK 7462W)
+     * BEFORE starting PWM. Without this, the compare registers default to 0,
      * giving a 0us pulse during boot / ERROR phases (when manipulator
      * short-circuits and never writes a valid command). PTK-class digital
      * servos interpret 0us as garbage and spin uncontrollably. */
-    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 1500);
-    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, 1500);
+    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_1, 1520);
+    __HAL_TIM_SET_COMPARE(&htim2, TIM_CHANNEL_2, 1520);
 
     HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_1);
     HAL_TIM_PWM_Start(&htim2, TIM_CHANNEL_2);
@@ -44,7 +44,7 @@ void BSP_PWM_SetServoPulse(BspServo_Dev_t servo, uint16_t us)
 {
     if (servo >= BSP_SERVO_NUM) return;
 
-    /* PTK 7350MG-D range: 500-2500 us at a 333 Hz PWM frame. */
+    /* PTK 7462W range: 500-2500 us at a 333 Hz PWM frame. */
     if (us < 500)  us = 500;
     if (us > 2500) us = 2500;
 

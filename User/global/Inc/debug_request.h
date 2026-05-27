@@ -69,6 +69,17 @@ typedef enum {
     /** Clear ControlTask FAULT phase, retry SERVO_PING. */
     DBG_REQ_CLEAR_FAULT,
 
+    /** Force-mode for PTK end-effector servos (PA0 gripper / PA1 roll).
+     *  Bypasses arbiter for the named PTK channel only; HX8 main arm
+     *  is unaffected.
+     *
+     *  arg1 = channel (0 = PA0 gripper, 1 = PA1 roll)
+     *  arg2:
+     *      0..180 lock the named PTK channel to that degree
+     *        < 0  release (return to RC arbiter control)
+     */
+    DBG_REQ_FORCE_PTK_ANGLE,
+
     /** Last enum sentinel for bounds checking. */
     DBG_REQ_TYPE_COUNT
 } DebugReqType_t;

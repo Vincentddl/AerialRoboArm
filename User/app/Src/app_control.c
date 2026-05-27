@@ -52,6 +52,12 @@ static MotionState_t    s_mstate;
 static bool    s_force_active     = false;
 static int16_t s_force_angle_deg  = 0;
 
+/* PTK end-effector force overrides. -1 = follow arbiter; 0..180 = lock to
+ * that angle. Independent from s_force_active so operator can fix the
+ * gripper while still flying the main arm via RC. */
+static int16_t s_ptk_gripper_force_deg = -1;
+static int16_t s_ptk_roll_force_deg    = -1;
+
 /* Two-step reset latch. ControlTask owns this so arbiter can stay a pure
  * function. Set to true when arbiter reports a latching fault (SD active,
  * RC loss); cleared when arbiter signals fault_reset_consumed. */
@@ -94,7 +100,7 @@ static void publish_hub(uint32_t now_ms, uint32_t loop_count)
     snap.arbiter_mode             = s_arb.mode;
     snap.arbiter_reason_code      = (uint8_t)s_arb.reason_code;
 
-    snap.servo_target_angle_deg   = (int16_t)s_arb.target_angle_deg;
+    snap.servo_target_angle_deg   = (int16_t)(s_arb.target_angle_deg * 10);
     snap.servo_target_speed       = s_arb.target_speed;
     snap.servo_target_acc         = s_arb.target_acc;
     snap.servo_torque_request     = s_arb.torque_request;
@@ -102,7 +108,7 @@ static void publish_hub(uint32_t now_ms, uint32_t loop_count)
     snap.end_gripper_deg          = s_arb.gripper_angle;
 
     if (s_mstate.feedback_valid) {
-        snap.servo_position_angle_deg = (int16_t)s_mstate.feedback.angle_deg;
+        snap.servo_position_angle_deg = (int16_t)(s_mstate.feedback.angle_deg * 10.0f);
         snap.servo_load               = s_mstate.feedback.current_ma;
         snap.servo_voltage_dv         = (uint8_t)(s_mstate.feedback.voltage_mv / 100U);
         snap.servo_moving             = s_mstate.is_moving;
@@ -156,6 +162,19 @@ static void handle_debug_request(uint32_t now_ms)
             s_force_active    = true;
         }
         break;
+    case DBG_REQ_FORCE_PTK_ANGLE: {
+        int16_t *slot = (req.arg1 == 0) ? &s_ptk_gripper_force_deg
+                                        : &s_ptk_roll_force_deg;
+        if (req.arg2 < 0) {
+            *slot = -1;
+        } else {
+            int32_t deg = req.arg2;
+            if (deg < 0)   deg = 0;
+            if (deg > 180) deg = 180;
+            *slot = (int16_t)deg;
+        }
+        break;
+    }
     case DBG_REQ_SWITCH_MODE:
     case DBG_REQ_SET_ESTOP:
     case DBG_REQ_CALIBRATE_ZERO:
@@ -282,6 +301,15 @@ static void step_running_normal(uint32_t now_ms)
         TaskRc_ReseedIncremental(cur);
     }
     s_fault_latched = s_arb.fault_latched_next;
+
+    /* Console PTK force overrides take priority over arbiter for the
+     * named end-effector channels only. HX8 main arm path is unchanged. */
+    if (s_ptk_gripper_force_deg >= 0) {
+        s_arb.gripper_angle = (uint8_t)s_ptk_gripper_force_deg;
+    }
+    if (s_ptk_roll_force_deg >= 0) {
+        s_arb.roll_degree = (uint8_t)s_ptk_roll_force_deg;
+    }
 
     TaskManipulator_Update(&s_arb, &s_mstate, now_ms, &s_mcmd);
 
