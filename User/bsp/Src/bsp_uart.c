@@ -5,6 +5,7 @@
  */
 
 #include "bsp_uart.h"
+#include "SEGGER_RTT.h"
 #include "stm32f1xx_hal.h"
 #include <stdio.h>
 #include <stdarg.h>
@@ -12,11 +13,9 @@
 
 /* [FreeRTOS Includes] */
 #include "FreeRTOS.h"
-#include "semphr.h"
 #include "task.h"
 
 /* --- Configuration --- */
-#define UART_DEBUG_RX_BUF_SIZE   (128U)
 #define UART_ELRS_RX_BUF_SIZE    (1024U)
 #define UART_FSUS_RX_BUF_SIZE    (256U)
 #define UART_TX_TIMEOUT_MS       (100U)
@@ -39,14 +38,10 @@ typedef struct {
     AraCallback_t       rx_cplt_cb;
 } UartContext_t;
 
-static uint8_t s_debug_rx_buffer[UART_DEBUG_RX_BUF_SIZE];
 static uint8_t s_elrs_rx_buffer[UART_ELRS_RX_BUF_SIZE];
 
 /* 多实例上下文数组 */
 static UartContext_t uart_ctx[BSP_UART_NUM];
-
-/* [IPC Resources - 仅供 DEBUG 发送使用] */
-static SemaphoreHandle_t tx_sem = NULL; // 发送完成信号量
 
 /* =============================================================================
  * FSUS interrupt-mode RX ring buffer (USART2)
@@ -136,8 +131,8 @@ void BSP_UART_Init(void)
     uart_ctx[BSP_UART_ELRS].huart   = &huart1;
     uart_ctx[BSP_UART_ST3215].huart = &huart2;   /* FSUS, full-duplex IT RX */
 
-    uart_ctx[BSP_UART_DEBUG].rx_buffer       = s_debug_rx_buffer;
-    uart_ctx[BSP_UART_DEBUG].rx_buffer_size  = sizeof(s_debug_rx_buffer);
+    uart_ctx[BSP_UART_DEBUG].rx_buffer       = NULL;
+    uart_ctx[BSP_UART_DEBUG].rx_buffer_size  = 0U;
     uart_ctx[BSP_UART_ELRS].rx_buffer        = s_elrs_rx_buffer;
     uart_ctx[BSP_UART_ELRS].rx_buffer_size   = sizeof(s_elrs_rx_buffer);
 
@@ -147,10 +142,8 @@ void BSP_UART_Init(void)
         uart_ctx[i].rx_cplt_cb = NULL;
     }
 
-    /* 2. Start Circular DMA RX for DEBUG / ELRS ring buffers. */
-    HAL_UART_Receive_DMA(uart_ctx[BSP_UART_DEBUG].huart,
-                         uart_ctx[BSP_UART_DEBUG].rx_buffer,
-                         uart_ctx[BSP_UART_DEBUG].rx_buffer_size);
+    /* 2. Start Circular DMA RX for ELRS ring buffer. DEBUG/UART3 is now
+     *    served by J-Link RTT — no hardware UART DMA needed for console. */
     HAL_UART_Receive_DMA(uart_ctx[BSP_UART_ELRS].huart,
                          uart_ctx[BSP_UART_ELRS].rx_buffer,
                          uart_ctx[BSP_UART_ELRS].rx_buffer_size);
@@ -159,15 +152,7 @@ void BSP_UART_Init(void)
      *     One byte per interrupt, pushed to s_fsus_rx_buf in the ISR. */
     HAL_UART_Receive_IT(&huart2, &s_fsus_rx_byte, 1);
 
-    /* 4. Create the DEBUG TX semaphore used by BSP_UART_Printf. */
-    tx_sem = xSemaphoreCreateBinary();
-
-    /* 5. Allow the first DEBUG TX. */
-    if (tx_sem != NULL) {
-        xSemaphoreGive(tx_sem);
-    }
-
-    /* 6. Half-duplex context init (legacy, kept for reference). */
+    /* 4. Half-duplex context init (legacy, kept for reference). */
     memset(&s_hd_ctx, 0, sizeof(s_hd_ctx));
     s_hd_ctx.state = HD_STATE_IDLE;
 }
@@ -177,37 +162,14 @@ void BSP_UART_Printf(const char *format, ...)
     va_list args;
     int len;
 
-    UART_HandleTypeDef *debug_huart = uart_ctx[BSP_UART_DEBUG].huart;
+    va_start(args, format);
+    len = vsnprintf(tx_buf, sizeof(tx_buf), format, args);
+    va_end(args);
 
-    if (xTaskGetSchedulerState() == taskSCHEDULER_RUNNING && tx_sem != NULL)
-    {
-        // --- 模式 A: RTOS 运行中 (使用 DMA + 信号量) ---
-        if (xSemaphoreTake(tx_sem, pdMS_TO_TICKS(UART_TX_TIMEOUT_MS)) == pdTRUE) {
-            va_start(args, format);
-            len = vsnprintf(tx_buf, sizeof(tx_buf), format, args);
-            va_end(args);
-
-            if (len > 0) {
-                if (HAL_UART_Transmit_DMA(debug_huart, (uint8_t*)tx_buf, len) != HAL_OK) {
-                    xSemaphoreGive(tx_sem);
-                }
-            } else {
-                xSemaphoreGive(tx_sem);
-            }
-        }
-    }
-    else
-    {
-        // --- 模式 B: 初始化阶段或 ISR 中 (使用阻塞发送) ---
-        while(HAL_UART_GetState(debug_huart) == HAL_UART_STATE_BUSY_TX);
-
-        va_start(args, format);
-        len = vsnprintf(tx_buf, sizeof(tx_buf), format, args);
-        va_end(args);
-
-        if (len > 0) {
-            HAL_UART_Transmit(debug_huart, (uint8_t*)tx_buf, len, 100);
-        }
+    if (len > 0) {
+        /* RTT channel 0: terminal output. NO_BLOCK_SKIP mode drops data
+         * silently when PC-side RTT Viewer is not connected. */
+        (void)SEGGER_RTT_Write(0, tx_buf, (unsigned)len);
     }
 }
 
@@ -427,17 +389,8 @@ void HAL_UART_RxHalfCpltCallback(UART_HandleTypeDef *huart)
 // 2. 发送完成
 void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart)
 {
-    /* DEBUG: release the printf semaphore. */
-    if (huart == uart_ctx[BSP_UART_DEBUG].huart) {
-        if (tx_sem != NULL) {
-            BaseType_t hpw = pdFALSE;
-            xSemaphoreGiveFromISR(tx_sem, &hpw);
-            portYIELD_FROM_ISR(hpw);
-        }
-        return;
-    }
-
-    /* FSUS uses blocking TX — no callback action needed for USART2. */
+    /* FSUS uses blocking TX; RTT handles debug TX without a UART ISR. */
+    (void)huart;
 }
 
 // 3. 错误回调
@@ -446,17 +399,6 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
     /* FSUS (USART2): re-arm interrupt RX after an error. */
     if (huart == uart_ctx[BSP_UART_ST3215].huart) {
         HAL_UART_Receive_IT(huart, &s_fsus_rx_byte, 1);
-        return;
-    }
-
-    /* DEBUG: re-give the semaphore so a parity/overrun does not deadlock printf. */
-    if (huart == uart_ctx[BSP_UART_DEBUG].huart) {
-        if (tx_sem != NULL) {
-            BaseType_t hpw = pdFALSE;
-            xSemaphoreGiveFromISR(tx_sem, &hpw);
-            portYIELD_FROM_ISR(hpw);
-        }
-        RestartCircularDmaRx(BSP_UART_DEBUG);
         return;
     }
 

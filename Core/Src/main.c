@@ -100,7 +100,7 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_DMA_Init();
-  MX_USART3_UART_Init();
+  // MX_USART3_UART_Init();  /* DEBUG replaced by J-Link RTT — USART3 freed for H13 */
   MX_TIM2_Init();
   MX_USART1_UART_Init();
   MX_USART2_UART_Init();

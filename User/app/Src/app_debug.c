@@ -12,6 +12,7 @@
 #include "datahub.h"
 #include "debug_request.h"
 #include "bsp_uart.h"
+#include "SEGGER_RTT.h"
 #include "dev_status.h"
 #include "task_motion.h"   /* TASK_MOTION_ANGLE_MIN_DEG / MAX_DEG */
 #include "task_rc.h"       /* TaskRc_CopyRawChannels */
@@ -171,7 +172,7 @@ static void console_handle_line_char(char c)
 static void console_poll(uint32_t tick_ms)
 {
     uint8_t buf[16];
-    uint16_t n = BSP_UART_Read(BSP_UART_DEBUG, buf, sizeof(buf));
+    unsigned n = SEGGER_RTT_Read(0, buf, sizeof(buf));
     for (uint16_t i = 0; i < n; i++) {
         char c = (char)buf[i];
 
