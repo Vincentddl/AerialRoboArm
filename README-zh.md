@@ -1,5 +1,9 @@
 # AerialRoboArm
 
+> **Archive note:** 本 README 描述的是较早的 `demo_v6` BLDC/AS5600 毕设 demo 状态。
+> 当前 PCB/固件联调已切换到 HX8-U26H-M UART 总线舵机、PTK 7462W PWM 小舵机、
+> RTT 日志链路，以及 `Doc/hardware/pinmap.md` 中记录的当前硬件清单。
+
 **基于 STM32F103、FreeRTOS、BLDC 电机控制、AS5600 位置反馈与 ELRS 遥控输入的轻量型无人机操作臂电控系统样机。**
 
 [English version](./README.md)

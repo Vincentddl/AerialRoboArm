@@ -289,6 +289,9 @@ static void led_render(uint32_t tick_ms)
  * ============================================================================= */
 
 static uint32_t s_snapshot_print_counter = 0U;
+/* Tracks last seen ELRS link state so we only print on edges (connect/disconnect).
+ * Init to -1 (neither 0 nor 1) so the first observed state always prints once. */
+static int8_t   s_last_rc_link_up = -1;
 
 static void raw_channel_dump(void)
 {
@@ -344,6 +347,14 @@ static void periodic_snapshot(void)
     }
     DataHub_t s;
     DataHub_Read(&s);
+
+    /* ELRS link edge logging: print only when the link state changes, so we
+     * get a clear "[RC] ELRS connected / lost" event without flooding RTT. */
+    if ((int8_t)s.rc_link_up != s_last_rc_link_up) {
+        s_last_rc_link_up = (int8_t)s.rc_link_up;
+        BSP_UART_Printf("[RC] ELRS %s\r\n", s.rc_link_up ? "connected" : "lost");
+    }
+
     int16_t force_angle = 0;
     bool    force_on    = App_Control_GetForceState(&force_angle);
 

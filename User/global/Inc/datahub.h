@@ -6,7 +6,7 @@
  * exchange. All RTOS tasks read from here for observability; only
  * ControlTask writes. This invariant is contractual, not enforced by code.
  *
- * Field semantics are tuned for the ST3215-HS smart joint era:
+ * Field semantics are tuned for the current HX8/FSUS smart-joint path:
  *   - Motion state is expressed in encoder steps and degrees (not the old
  *     wrapped FOC angle). Multi-turn will be added post demo_v7.
  *   - Link health is a cross-channel concern (RC, vision, servo).

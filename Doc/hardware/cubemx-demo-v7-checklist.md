@@ -1,5 +1,10 @@
 # CubeMX Checklist for demo_v7 Hardware Bring-Up
 
+> **Archive note:** This checklist targets the old ST3215 half-duplex bring-up
+> plan. The current hardware chain is STM32 USART2 -> UC-01 -> HX8-U26H-M
+> using the FSUS/HX8 path, so this document is retained only as historical
+> CubeMX context.
+
 This checklist is for the day the ST3215 servo hardware arrives. It records the exact STM32CubeMX changes needed to move the firmware from the current mock-only `demo_v7` state to real USART2 half-duplex servo communication plus watchdog protection.
 
 Use this document together with `FOC_DEMO2.ioc`.

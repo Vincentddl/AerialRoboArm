@@ -1,15 +1,12 @@
 /**
  * @file bsp_uart.h
- * @brief UART Driver with DMA RingBuffer + Half-Duplex transaction API.
+ * @brief UART Driver with ELRS DMA RX, FSUS blocking TX / interrupt RX, and RTT logging.
  *
- * Existing APIs (Printf / Send_DMA / Read / SetRxCpltCallback) continue to
- * work for USART3 (debug) and USART1 (ELRS).
+ * Existing Read APIs remain for USART1 (ELRS). Debug printing now goes through
+ * SEGGER RTT, not USART3.
  *
- * The HD_* extension is designed for ST3215 serial bus servo on USART2 with
- * hardware half-duplex (USART_CR3_HDSEL = 1). The upper layer (task_motion)
- * composes a protocol frame via drv_st3215, pushes it through HalfDuplex_Transact,
- * then waits for the response with HD_WaitRx. Time budget at 1 Mbps is 2 ms
- * per round-trip.
+ * The HD_* extension below is legacy ST3215 support kept for reference only.
+ * The current HX8-U26H-M path uses the FSUS helpers.
  */
 
 #ifndef BSP_UART_H
@@ -22,7 +19,7 @@
 typedef enum {
     BSP_UART_DEBUG = 0,
     BSP_UART_ELRS,       /**< ELRS receiver input (USART1). */
-    BSP_UART_ST3215,     /**< FSUS / ST3215 bus servo (USART2). */
+    BSP_UART_ST3215,     /**< Legacy enum name; current USART2 bus-servo path is FSUS/HX8. */
     BSP_UART_NUM
 } BspUart_Dev_t;
 

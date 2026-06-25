@@ -8,11 +8,16 @@ This directory contains the curated documentation for the AerialRoboArm electric
 | --- | --- |
 | [MY_WORK.md](./MY_WORK.md) | Personal contribution boundary and work summary. |
 | [About AI Assist Pipeline - Share.md](./About%20AI%20Assist%20Pipeline%20-%20Share.md) | DACMAS AI-native development workflow and methodology. |
-| [design/00_SYSTEM_CONSTITUTION.md](./design/00_SYSTEM_CONSTITUTION.md) | Top-level project identity, system boundary, and design principles. |
-| [design/01_RUNTIME_ARCHITECTURE.md](./design/01_RUNTIME_ARCHITECTURE.md) | Runtime architecture, frequency domains, task organization, and data flow. |
 | [hardware/pinmap.md](./hardware/pinmap.md) | STM32 pin assignment and external wiring reference. |
-| [hardware/cubemx-demo-v7-checklist.md](./hardware/cubemx-demo-v7-checklist.md) | CubeMX step-by-step checklist for `demo_v7` real ST3215 bring-up day. |
 | [demo/final-demo.md](./demo/final-demo.md) | Final `demo_v6` demo/testbench scope and media entry points. |
+
+## Archived / Historical Documents
+
+| Document | Archive reason |
+| --- | --- |
+| [design/00_SYSTEM_CONSTITUTION.md](./design/00_SYSTEM_CONSTITUTION.md) | Older BLDC/AS5600 design narrative; retained for thesis/history context. |
+| [design/01_RUNTIME_ARCHITECTURE.md](./design/01_RUNTIME_ARCHITECTURE.md) | Older dual-thread BLDC/AS5600 runtime architecture; current bring-up uses HX8/FSUS + PTK. |
+| [hardware/cubemx-demo-v7-checklist.md](./hardware/cubemx-demo-v7-checklist.md) | Old ST3215 half-duplex CubeMX checklist; current chain is STM32 USART2 -> UC-01 -> HX8-U26H-M. |
 
 ## Directory Layout
 

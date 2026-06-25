@@ -1,6 +1,8 @@
 /**
  * @file drv_st3215.c
  * @brief L2 Hardware Driver: ST3215-HS Serial Bus Servo (protocol layer).
+ * @archive Legacy ST3215 protocol driver. Current HX8-U26H-M bring-up uses
+ *          User/drv/Src/drv_fsus.c and this file is excluded from the build.
  *
  * Pure C, no RTOS, no HAL, no BSP. All wire-format byte sequences match
  * the Feetech SMS_STS application layer with End=0 (little-endian on wire).

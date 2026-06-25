@@ -8,7 +8,7 @@
  *   3. TaskVision_Update   -> VisionIntent_t
  *   4. TaskArbiter_Decide  -> ArbiterOutput_t
  *   5. TaskManipulator_Update -> MotionCmd_t
- *   6. TaskMotion_Update   -> MotionState_t (may do ST3215 IO)
+ *   6. TaskMotion_Update   -> MotionState_t (HX8/FSUS bus IO when enabled)
  *   7. Publish DataHub snapshot.
  *   8. Update heartbeat for Housekeeping / IWDG.
  *

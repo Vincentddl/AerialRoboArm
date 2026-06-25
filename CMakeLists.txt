@@ -61,6 +61,7 @@ add_definitions(-DDEBUG -DUSE_HAL_DRIVER -DSTM32F103xB)
 file(GLOB_RECURSE SOURCES "Core/*.*" "Middlewares/*.*" "Drivers/*.*" "User/*.*")
 
 # ===== demo_v7: exclude legacy code from build =====
+list(FILTER SOURCES EXCLUDE REGEX ".*User/archive/.*$")
 list(FILTER SOURCES EXCLUDE REGEX ".*test_console_drvtest\\.c$")
 list(FILTER SOURCES EXCLUDE REGEX ".*app_threads\\.(c|h)$")
 list(FILTER SOURCES EXCLUDE REGEX ".*app_testbench\\.(c|h)$")

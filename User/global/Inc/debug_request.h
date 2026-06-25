@@ -58,7 +58,7 @@ typedef enum {
      *
      *  While force mode is active, Arbiter and Manipulator are NOT
      *  consulted. This is intentional: force mode is a bring-up tool
-     *  for verifying the USART2 / ST3215 / mechanical loop without
+     *  for verifying the USART2 / UC-01 / HX8 mechanical loop without
      *  any policy layer in between.
      */
     DBG_REQ_FORCE_GOTO_ANGLE,

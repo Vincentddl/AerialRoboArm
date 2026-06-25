@@ -238,7 +238,7 @@ static void step_config(uint32_t now_ms)
      * ReadFeedback round-trip and confirmed servo_online; that doubles
      * as a liveness + ID/baud sanity check. Anything beyond that
      * (MODE / MIN / MAX / TORQUE_LIMIT / LOCK validation) would require:
-     *   - new READ-byte encode/parse helpers in drv_st3215
+     *   - HX8/FSUS-compatible read helpers in drv_fsus
      *   - a per-register readback against expected defaults
      *   - a bring-up policy decision: read-only check, or auto-rewrite
      *     EEPROM (which has limited write cycles)
@@ -246,7 +246,7 @@ static void step_config(uint32_t now_ms)
      * For demo_v7 the policy is: physically inspect / set EEPROM via the
      * vendor utility once before first power-up. If a future regression
      * makes this insufficient, escalate this stub to A2 in the bring-up
-     * notes (drv_st3215 read helpers + per-register validation).
+     * notes (HX8/FSUS read helpers + per-register validation).
      */
     enter_phase(CTRL_PHASE_SERVO_ENABLE, now_ms);
 }

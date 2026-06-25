@@ -1,6 +1,8 @@
 /**
  * @file drv_st3215.h
  * @brief L2 Hardware Driver: Feetech/Waveshare ST3215-HS Serial Bus Servo
+ * @archive Legacy ST3215 protocol driver. Current HX8-U26H-M bring-up uses
+ *          User/drv/Inc/drv_fsus.h and this header is excluded from the build.
  *
  * Pure protocol encoding / decoding layer for the ST3215-HS intelligent joint.
  * Strictly C99. NO RTOS, NO HAL, NO BSP dependencies. NO FPU.

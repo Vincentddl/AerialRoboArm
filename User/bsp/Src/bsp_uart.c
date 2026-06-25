@@ -1,7 +1,7 @@
 /**
  * @file bsp_uart.c
  * @brief UART Driver: FSUS interrupt-RX / blocking-TX on USART2,
- *        DMA ring buffers on USART1/3, DEBUG printf over DMA.
+ *        DMA ring buffer on USART1, debug printf over SEGGER RTT.
  */
 
 #include "bsp_uart.h"
@@ -20,12 +20,12 @@
 #define UART_FSUS_RX_BUF_SIZE    (256U)
 #define UART_TX_TIMEOUT_MS       (100U)
 
-/* Half-duplex notification bits (legacy ST3215 HD state machine) */
+/* Half-duplex notification bits (legacy ST3215 HD state machine, archived driver). */
 #define HD_NOTIFY_RX_DONE        (1U << 0)
 #define HD_NOTIFY_RX_ERROR       (1U << 1)
 
 /* --- Hardware Resources --- */
-extern UART_HandleTypeDef huart3;   // DEBUG
+extern UART_HandleTypeDef huart3;   // Legacy DEBUG UART handle; debug output now uses RTT.
 extern UART_HandleTypeDef huart1;   // ELRS
 extern UART_HandleTypeDef huart2;   // FSUS (USART2, full-duplex)
 
@@ -62,7 +62,7 @@ static volatile uint32_t s_elrs_rx_bytes = 0U;
 static volatile uint32_t s_uart_rx_dma_recoveries = 0U;
 
 /* =============================================================================
- * Half-Duplex transaction state (ST3215 / USART2)
+ * Half-Duplex transaction state (legacy ST3215 / USART2)
  *
  * One outstanding transaction at a time. Three observable states:
  *   IDLE          - no transaction
@@ -189,7 +189,7 @@ uint16_t BSP_UART_Read(BspUart_Dev_t dev, uint8_t *p_data, uint16_t len)
     UartContext_t *ctx = &uart_ctx[dev];
     if (ctx->rx_buffer == NULL || ctx->rx_buffer_size == 0U) return 0;
 
-    /* ST3215 RX is event-driven, not ringbuffer; reject ringbuffer reads on it */
+    /* Legacy ST3215 RX was event-driven, not ringbuffer; reject ringbuffer reads on it */
     if (dev == BSP_UART_ST3215) return 0;
 
     uint16_t head = GetDmaHead(dev);

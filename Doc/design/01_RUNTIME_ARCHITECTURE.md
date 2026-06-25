@@ -1,5 +1,10 @@
 ## 01_RUNTIME_ARCHITECTURE.md
 
+> **Archive note:** This runtime architecture describes the older dual-thread
+> BLDC/AS5600 direction. It is kept for history/reference only. The current
+> active firmware path is `app_control` + `app_debug` + HX8/FSUS + PTK PWM
+> servos, with hardware context in `Doc/hardware/pinmap.md`.
+
 # Runtime Architecture v1.0
 
 ## 1. 文档定位

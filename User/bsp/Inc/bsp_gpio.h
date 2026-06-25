@@ -1,7 +1,7 @@
 /**
  * @file bsp_gpio.h
  * @brief GPIO Hardware Abstraction
- * @note  Required for Motor Enable (SimpleFOC Mini) and Status LEDs
+ * @note  Status LED only. MOTOR_EN (PA11) removed — PCB not connected.
  */
 
 #ifndef BSP_GPIO_H
@@ -11,8 +11,7 @@
 
 /* --- Device Definition --- */
 typedef enum {
-    BSP_GPIO_MOTOR_EN = 0,  // SimpleFOC Mini Enable Pin
-    BSP_GPIO_LED_STATUS,    // Onboard Debug LED
+    BSP_GPIO_LED_STATUS = 0,  // Onboard Debug LED (PC13)
     BSP_GPIO_QTY
 } BspGpio_Pin_t;
 

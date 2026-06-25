@@ -19,8 +19,8 @@
  *   tskIDLE_PRIORITY       =                       ( 0)
  *
  * The 2-step gap between ControlTask and Housekeeping leaves room for a
- * future "RealTime IO" task (e.g. high-rate ST3215 multi-servo) without
- * having to rebalance everything.
+ * future "RealTime IO" task (e.g. high-rate bus-servo IO) without having to
+ * rebalance everything.
  */
 
 #ifndef ARA_PRIO_H
@@ -45,7 +45,7 @@
  * Task stack sizes (in CMSIS-OS bytes, not FreeRTOS words)
  * ========================================================================== */
 
-/** ControlTask: arbiter + FSM + ST3215 IO buffers + printf-free hot path. */
+/** ControlTask: arbiter + FSM + bus-servo IO buffers + printf-free hot path. */
 #define ARA_STACK_CONTROL_BYTES        (2048U)   /* 512 words */
 
 /** DebugTask: printf format buffers dominate. */

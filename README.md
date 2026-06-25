@@ -1,5 +1,10 @@
 # AerialRoboArm
 
+> **Archive note:** This README describes the older `demo_v6` BLDC/AS5600
+> thesis-demo state. The current PCB/firmware bring-up has moved to the
+> HX8-U26H-M UART bus servo, PTK 7462W PWM servos, RTT logging, and the
+> hardware notes under `Doc/hardware/pinmap.md`.
+
 **A lightweight UAV-mounted robotic arm electrical-control prototype based on STM32F103, FreeRTOS, BLDC motor control, AS5600 feedback, and ELRS remote input.**
 
 [中文版本](./README-zh.md)

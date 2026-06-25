@@ -1,5 +1,9 @@
 # docs/design v0
 
+> **Archive note:** This design document belongs to the older BLDC/AS5600
+> architecture narrative. It is kept for thesis/history reference only. The
+> current hardware bring-up is documented in `Doc/hardware/pinmap.md`.
+
 ## 00_SYSTEM_CONSTITUTION.md
 
 # AerialRoboArm 顶层宪法 v1.0
