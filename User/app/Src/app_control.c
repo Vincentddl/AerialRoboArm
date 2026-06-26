@@ -114,6 +114,8 @@ static void publish_hub(uint32_t now_ms, uint32_t loop_count)
         snap.servo_moving             = s_mstate.is_moving;
     }
     snap.servo_status = s_mstate.servo_online ? ARA_OK : ARA_ERR_DISCONNECTED;
+    snap.servo_last_write_result = (uint8_t)s_mstate.last_write_result;
+    snap.servo_last_read_result  = (uint8_t)s_mstate.last_read_result;
 
     snap.rc_link_up      = s_rc.is_link_up;
     snap.vision_link_up  = s_vis.target_present;

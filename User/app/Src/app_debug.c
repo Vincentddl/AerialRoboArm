@@ -370,7 +370,7 @@ static void periodic_snapshot(void)
     int32_t tgt_int = tgt_abs / 10;
     int32_t tgt_frc = tgt_abs % 10;
 
-    BSP_UART_Printf("[DBG] %s %s rc=%d vis=%d pos=%s%d.%d tgt=%s%d.%d load=%d roll=%3u grip=%3u tx=%lu rx=%lu erx=%lu rec=%lu%s\r\n",
+    BSP_UART_Printf("[DBG] %s %s rc=%d vis=%d pos=%s%d.%d tgt=%s%d.%d load=%d roll=%3u grip=%3u wr=%u rd=%u tx=%lu rx=%lu erx=%lu rec=%lu%s\r\n",
                     mode_to_str((uint8_t)s.current_mode),
                     reason_to_str(s.arbiter_reason_code),
                     (int)s.rc_link_up,
@@ -380,6 +380,8 @@ static void periodic_snapshot(void)
                     (int)s.servo_load,
                     (unsigned)s.end_roll_deg,
                     (unsigned)s.end_gripper_deg,
+                    (unsigned)s.servo_last_write_result,
+                    (unsigned)s.servo_last_read_result,
                     (unsigned long)BSP_UART_Fsus_GetTxBytes(),
                     (unsigned long)BSP_UART_Fsus_GetRxBytes(),
                     (unsigned long)BSP_UART_Elrs_GetRxBytes(),

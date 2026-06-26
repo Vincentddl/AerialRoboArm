@@ -17,6 +17,10 @@
 /* Last-sent target tracking for change detection. */
 static float    s_last_target_deg     = -999.0f;
 static bool     s_torque_active       = false;
+static uint32_t s_last_feedback_ok_ms = 0U;
+static uint32_t s_last_feedback_poll_ms = 0U;
+static bool     s_last_feedback_valid = false;
+static FsusFeedback_t s_last_feedback;
 
 #if TASK_MOTION_USE_MOCK
 /* Mock-mode servo simulator */
@@ -146,6 +150,23 @@ static FsusParseResult_t do_set_angle(float    angle_deg,
     return FSUS_PARSE_OK;
 }
 
+static FsusParseResult_t do_ping(void)
+{
+    uint8_t tx[FSUS_TX_BUF_SIZE];
+    uint8_t rx[FSUS_RX_BUF_SIZE];
+
+    uint16_t tx_len = DrvFsus_EncodePing(tx, TASK_MOTION_SERVO_ID);
+    if (tx_len == 0U) {
+        return FSUS_PARSE_BAD_FRAME;
+    }
+
+    uint16_t rx_len = fsus_transact(tx, tx_len, rx, FSUS_IO_TIMEOUT_MS);
+    if (rx_len < 5U) {
+        return FSUS_PARSE_TIMEOUT;
+    }
+    return DrvFsus_ParsePing(rx, rx_len, TASK_MOTION_SERVO_ID);
+}
+
 static FsusParseResult_t do_read_feedback(uint32_t        tick_ms,
                                           FsusFeedback_t *out)
 {
@@ -177,6 +198,10 @@ void TaskMotion_Init(void)
 {
     s_last_target_deg = -999.0f;
     s_torque_active   = false;
+    s_last_feedback_ok_ms = 0U;
+    s_last_feedback_poll_ms = 0U;
+    s_last_feedback_valid = false;
+    memset(&s_last_feedback, 0, sizeof(s_last_feedback));
 
 #if TASK_MOTION_USE_MOCK
     s_mock_pos_deg       = 0.0f;
@@ -276,6 +301,21 @@ void TaskMotion_Update(const MotionCmd_t *cmd,
 
     float target_deg = map_angle_to_fsus(cmd->target_angle_deg);
 
+    /* Bring-up probe: match the vendor SDK's first diagnostic step and only
+     * prove ID/baud/electrical reachability. ServoMonitor is still used for
+     * runtime telemetry after the control FSM enters RUNNING. */
+    if ((!cmd->torque_on) && cmd->force_update) {
+        state->last_write_result = FSUS_PARSE_OK;
+        state->last_read_result  = do_ping();
+        if (state->last_read_result == FSUS_PARSE_OK) {
+            state->servo_online = true;
+            state->feedback.servo_id     = TASK_MOTION_SERVO_ID;
+            state->feedback.timestamp_ms = tick_ms;
+            s_last_feedback_ok_ms = tick_ms;
+        }
+        return;
+    }
+
     /* --- Torque transition ---
      * Protocol-level meaning:
      *   false -> Stop(unlock), release holding torque
@@ -322,19 +362,41 @@ void TaskMotion_Update(const MotionCmd_t *cmd,
         state->last_write_result = FSUS_PARSE_OK;
     }
 
-    /* --- Always read feedback ---
+    /* --- Periodically read feedback ---
      * Command frames tell the servo what to do; monitor frames tell us what
-     * actually happened inside the servo controller. */
-    state->last_read_result = do_read_feedback(tick_ms, &state->feedback);
+     * actually happened inside the servo controller. Polling at the full
+     * control-loop rate can overload a marginal bring-up bus, so telemetry is
+     * intentionally decimated and cached between successful monitor frames. */
+    bool should_poll = (!s_last_feedback_valid) ||
+                       ((uint32_t)(tick_ms - s_last_feedback_poll_ms) >= TASK_MOTION_FEEDBACK_PERIOD_MS);
+
+    if (should_poll) {
+        state->last_read_result = do_read_feedback(tick_ms, &state->feedback);
+        s_last_feedback_poll_ms = HAL_GetTick();
+    } else {
+        state->last_read_result = FSUS_PARSE_OK;
+        state->feedback = s_last_feedback;
+        state->feedback.timestamp_ms = tick_ms;
+    }
+
     if (state->last_read_result == FSUS_PARSE_OK) {
         state->feedback_valid = true;
         state->servo_online   = true;
+        s_last_feedback = state->feedback;
+        s_last_feedback_valid = true;
+        s_last_feedback_ok_ms = tick_ms;
 
         /* Motion classification from servo status byte. */
         uint8_t st = state->feedback.status;
         state->is_stalled  = ((st >> 2) & 0x01U) != 0U;  /* BIT2 = stall */
         state->is_overload = (st != 0U);                   /* any fault */
         state->is_moving   = !state->is_stalled;           /* rough */
+    } else if (s_last_feedback_valid &&
+               ((uint32_t)(tick_ms - s_last_feedback_ok_ms) <= TASK_MOTION_ONLINE_GRACE_MS)) {
+        state->feedback = s_last_feedback;
+        state->feedback.timestamp_ms = tick_ms;
+        state->feedback_valid = true;
+        state->servo_online = true;
     }
 }
 

@@ -142,6 +142,8 @@ typedef struct {
     uint8_t           servo_temp_c;
     bool              servo_moving;
     AraStatus_t       servo_status;          /**< ARA_OK / ARA_BUSY / ARA_ERR_DISCONNECTED. */
+    uint8_t           servo_last_write_result; /**< FsusParseResult_t as a compact debug code. */
+    uint8_t           servo_last_read_result;  /**< FsusParseResult_t as a compact debug code. */
 
     /* --- Link health --- */
     bool              rc_link_up;

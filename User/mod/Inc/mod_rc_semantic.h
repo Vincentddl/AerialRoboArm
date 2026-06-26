@@ -26,8 +26,8 @@
  *        immediately, then every STEP_INTERVAL_MS while held.
  */
 #define MOD_RC_CH1_DEADBAND_PCT       (15)
-#define MOD_RC_CH1_STEP_INTERVAL_MS   (20U)
-#define MOD_RC_CH1_STEP_DEG           (15)
+#define MOD_RC_CH1_STEP_INTERVAL_MS   (50U)
+#define MOD_RC_CH1_STEP_DEG           (10)
 
 /**
  * @brief CH1 threshold for entering EXTEND state.
