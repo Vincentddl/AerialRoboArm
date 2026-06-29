@@ -26,7 +26,7 @@
  *        immediately, then every STEP_INTERVAL_MS while held.
  */
 #define MOD_RC_CH1_DEADBAND_PCT       (15)
-#define MOD_RC_CH1_STEP_INTERVAL_MS   (50U)
+#define MOD_RC_CH1_STEP_INTERVAL_MS   (30U)
 #define MOD_RC_CH1_STEP_DEG           (10)
 
 /**
@@ -45,12 +45,14 @@
 #define MOD_RC_CH1_EXIT_HOLD_ABS_PCT (35)
 
 /**
- * @brief CH4 gripper center deadband (raw counts). Spring-centered stick
- *        rests around RAW_MID with mild ADC noise. ±30 raw ≈ ±3.3 deg
- *        of stick travel — small enough to feel 1:1, large enough to
- *        suppress visible jitter when idle.
+ * @brief CH4 gripper momentary control. Holding the spring-centered stick
+ *        right past ENTER commands ACTIVE_DEG; releasing below EXIT returns
+ *        to DEFAULT_DEG.
  */
-#define MOD_RC_CH4_CENTER_DEADBAND_RAW (30U)
+#define MOD_RC_CH4_MOMENTARY_DEFAULT_DEG (90U)
+#define MOD_RC_CH4_MOMENTARY_ACTIVE_DEG  (135U)
+#define MOD_RC_CH4_MOMENTARY_ENTER_PCT   (55)
+#define MOD_RC_CH4_MOMENTARY_EXIT_PCT    (25)
 
 /* Channel Mapping Indices (CRSF array is 0-indexed) */
 #define MOD_RC_IDX_CH1 0U  /**< CH1: Stick RX axis (main arm incremental intent). */
@@ -87,7 +89,7 @@ typedef struct {
 
     /* --- 新增：专门用于标定的绝对角度语义 --- */
     uint8_t  roll_angle;       /**< Mapped from CH8 / SF wheel, [0, 180] deg. */
-    uint8_t  gripper_angle;    /**< Mapped from CH4 spring axis, [0, 180] deg. */
+    uint8_t  gripper_angle;    /**< CH4 momentary gripper target, [90 or 135] deg. */
 } RcDebugAnalogData_t;
 
 /* =========================================================
@@ -106,6 +108,9 @@ typedef struct {
     /* CH1 incremental stepping */
     int16_t     inc_target_deg;    /**< Accumulated incremental target angle. */
     uint32_t    inc_last_step_ms;  /**< Tick of last step, 0 = take first step immediately. */
+
+    /* CH4 gripper momentary latch */
+    bool        ch4_right_active; /**< True while CH4 right command is latched active. */
 } ModRcSemantic_Context_t;
 
 /* =========================================================

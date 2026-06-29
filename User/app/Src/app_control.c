@@ -63,6 +63,8 @@ static int16_t s_ptk_roll_force_deg    = -1;
  * RC loss); cleared when arbiter signals fault_reset_consumed. */
 static bool    s_fault_latched    = false;
 
+#define APP_CONTROL_STARTUP_HOME_MS (300U)
+
 /* =============================================================================
  * Helpers
  * ============================================================================= */
@@ -255,7 +257,20 @@ static void step_config(uint32_t now_ms)
 
 static void step_enable(uint32_t now_ms)
 {
-    enter_phase(CTRL_PHASE_RUNNING, now_ms);
+    s_mcmd.torque_on          = true;
+    s_mcmd.target_angle_deg   = 0.0f;
+    s_mcmd.velocity_deg_per_s = TASK_MOTION_DEFAULT_VELOCITY;
+    s_mcmd.t_acc_ms           = TASK_MOTION_DEFAULT_T_ACC_MS;
+    s_mcmd.t_dec_ms           = TASK_MOTION_DEFAULT_T_DEC_MS;
+    s_mcmd.power_mw           = TASK_MOTION_DEFAULT_POWER_MW;
+    s_mcmd.force_update       = false;
+
+    TaskMotion_Update(&s_mcmd, now_ms, &s_mstate);
+    TaskRc_ReseedIncremental(0);
+
+    if ((uint32_t)(now_ms - s_phase_enter_ms) >= APP_CONTROL_STARTUP_HOME_MS) {
+        enter_phase(CTRL_PHASE_RUNNING, now_ms);
+    }
 }
 
 static void step_fault(uint32_t now_ms)

@@ -63,11 +63,11 @@ static uint16_t map_analog_permille(uint16_t ch_val)
 }
 
 /**
- * @brief  Map CH1 raw value to signed percent [-100, +100].
+ * @brief  Map an analog channel raw value to signed percent [-100, +100].
  * @param  ch_val Raw channel value.
  * @return Signed percentage.
  */
-static int16_t map_ch1_percent(int16_t ch_val)
+static int16_t map_analog_percent_signed(int16_t ch_val)
 {
     int32_t delta;
 
@@ -140,17 +140,20 @@ static uint8_t map_analog_degree(uint16_t ch_val)
 }
 
 /**
- * @brief  Map an analog channel to degree, snapping near-center to 90 deg.
- *         Use for spring-centered sticks that exhibit ADC jitter when idle.
+ * @brief  Update CH4 momentary right-hold state for the gripper servo.
  */
-static uint8_t map_analog_degree_centered(uint16_t ch_val, uint16_t deadband_raw)
+static uint8_t update_ch4_gripper_momentary(ModRcSemantic_Context_t *p_ctx,
+                                            int16_t ch4_pct)
 {
-    int32_t delta = (int32_t)ch_val - (int32_t)MOD_RC_VAL_MID;
-    if (delta < 0) delta = -delta;
-    if (delta < (int32_t)deadband_raw) {
-        return 90U;
+    if (ch4_pct > MOD_RC_CH4_MOMENTARY_ENTER_PCT) {
+        p_ctx->ch4_right_active = true;
+    } else if (ch4_pct < MOD_RC_CH4_MOMENTARY_EXIT_PCT) {
+        p_ctx->ch4_right_active = false;
     }
-    return map_analog_degree(ch_val);
+
+    return p_ctx->ch4_right_active
+               ? MOD_RC_CH4_MOMENTARY_ACTIVE_DEG
+               : MOD_RC_CH4_MOMENTARY_DEFAULT_DEG;
 }
 
 /* =========================================================
@@ -171,6 +174,8 @@ AraStatus_t ModRcSemantic_Init(ModRcSemantic_Context_t *p_ctx,
 
     p_ctx->inc_target_deg   = 0;
     p_ctx->inc_last_step_ms = 0U;
+    p_ctx->ch4_right_active =
+        (map_analog_percent_signed((int16_t)initial_chs[MOD_RC_IDX_CH4]) > MOD_RC_CH4_MOMENTARY_ENTER_PCT);
 
     return ARA_OK;
 }
@@ -226,12 +231,13 @@ AraStatus_t ModRcSemantic_Process(ModRcSemantic_Context_t *p_ctx,
     /* SF: Aux knob */
     out_data->aux_knob_val = map_analog_permille(channels[MOD_RC_IDX_SF]);
 
-    /* Continuous analog semantics consumed by demo_v7 Arbiter. */
-    ch1_pct = map_ch1_percent((int16_t)channels[MOD_RC_IDX_CH1]);
+    /* Analog RC semantics consumed by the control arbiter. */
+    ch1_pct = map_analog_percent_signed((int16_t)channels[MOD_RC_IDX_CH1]);
     out_data->ch1_percent = ch1_pct;
     out_data->roll_degree = map_analog_degree(channels[MOD_RC_IDX_SF]);
-    out_data->gripper_angle = map_analog_degree_centered(channels[MOD_RC_IDX_CH4],
-                                                          MOD_RC_CH4_CENTER_DEADBAND_RAW);
+    out_data->gripper_angle =
+        update_ch4_gripper_momentary(p_ctx,
+                                     map_analog_percent_signed((int16_t)channels[MOD_RC_IDX_CH4]));
 
     /* ---------------- CH1 incremental stepping ---------------- */
     {
@@ -319,7 +325,7 @@ AraStatus_t ModRcSemantic_ProcessDebugAnalog(ModRcSemantic_Context_t *p_ctx,
         out_data->estop_state = (uint8_t)ESTOP_RELEASED;
     }
 
-    out_data->ch1_percent = map_ch1_percent((int16_t)channels[MOD_RC_IDX_CH1]);
+    out_data->ch1_percent = map_analog_percent_signed((int16_t)channels[MOD_RC_IDX_CH1]);
     out_data->aux_knob_val = map_analog_permille(channels[MOD_RC_IDX_SF]);
 
     /* ---------------- CH1 incremental stepping ---------------- */
@@ -349,8 +355,9 @@ AraStatus_t ModRcSemantic_ProcessDebugAnalog(ModRcSemantic_Context_t *p_ctx,
     out_data->sys_reset_pulse = update_sb_reset_pulse(p_ctx, sb_now, current_tick_ms);
 
     out_data->roll_angle = map_analog_degree(channels[MOD_RC_IDX_SF]);
-    out_data->gripper_angle = map_analog_degree_centered(channels[MOD_RC_IDX_CH4],
-                                                          MOD_RC_CH4_CENTER_DEADBAND_RAW);
+    out_data->gripper_angle =
+        update_ch4_gripper_momentary(p_ctx,
+                                     map_analog_percent_signed((int16_t)channels[MOD_RC_IDX_CH4]));
 
     return ARA_OK;
 }
