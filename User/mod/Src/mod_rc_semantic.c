@@ -156,6 +156,64 @@ static uint8_t update_ch4_gripper_momentary(ModRcSemantic_Context_t *p_ctx,
                : MOD_RC_CH4_MOMENTARY_DEFAULT_DEG;
 }
 
+static int16_t clamp_ch1_target_deg(int32_t deg)
+{
+    if (deg > 180) return 180;
+    if (deg < -180) return -180;
+    return (int16_t)deg;
+}
+
+static void update_ch1_rate_target(ModRcSemantic_Context_t *p_ctx,
+                                   int16_t ch1_pct,
+                                   bool manual_enabled,
+                                   uint32_t current_tick_ms)
+{
+    if (p_ctx->inc_last_step_ms == 0U) {
+        p_ctx->inc_last_step_ms = current_tick_ms;
+        return;
+    }
+
+    uint32_t dt_ms = current_tick_ms - p_ctx->inc_last_step_ms;
+    if (dt_ms == 0U) {
+        return;
+    }
+    if (dt_ms > 100U) {
+        dt_ms = 100U;
+    }
+    p_ctx->inc_last_step_ms = current_tick_ms;
+
+    int16_t abs_pct = (ch1_pct >= 0) ? ch1_pct : (int16_t)(-ch1_pct);
+    if ((!manual_enabled) || (abs_pct <= MOD_RC_CH1_DEADBAND_PCT)) {
+        return;
+    }
+
+    int32_t effective_pct = (int32_t)abs_pct - (int32_t)MOD_RC_CH1_DEADBAND_PCT;
+    int32_t active_span = 100L - (int32_t)MOD_RC_CH1_DEADBAND_PCT;
+    int32_t delta_q8 = ((int32_t)MOD_RC_CH1_RATE_MAX_DEG_PER_S *
+                        (int32_t)dt_ms *
+                        effective_pct *
+                        256L) / (1000L * active_span);
+    if (delta_q8 < 1L) {
+        delta_q8 = 1L;
+    }
+
+    if (ch1_pct < 0) {
+        delta_q8 = -delta_q8;
+    }
+
+    p_ctx->inc_target_q8 += delta_q8;
+
+    const int32_t min_q8 = -180L * 256L;
+    const int32_t max_q8 =  180L * 256L;
+    if (p_ctx->inc_target_q8 < min_q8) p_ctx->inc_target_q8 = min_q8;
+    if (p_ctx->inc_target_q8 > max_q8) p_ctx->inc_target_q8 = max_q8;
+
+    p_ctx->inc_target_deg = clamp_ch1_target_deg(
+        (p_ctx->inc_target_q8 >= 0) ?
+            ((p_ctx->inc_target_q8 + 128L) / 256L) :
+            ((p_ctx->inc_target_q8 - 128L) / 256L));
+}
+
 /* =========================================================
  * API Implementation
  * ========================================================= */
@@ -171,8 +229,10 @@ AraStatus_t ModRcSemantic_Init(ModRcSemantic_Context_t *p_ctx,
     p_ctx->sb_last_pos = map_3pos(initial_chs[MOD_RC_IDX_SB]);
     p_ctx->sb_pulse_start_ms = 0U;
     p_ctx->sb_pulse_active = false;
+    p_ctx->se_last_active = map_2pos(initial_chs[MOD_RC_IDX_SE]);
 
     p_ctx->inc_target_deg   = 0;
+    p_ctx->inc_target_q8    = 0;
     p_ctx->inc_last_step_ms = 0U;
     p_ctx->ch4_right_active =
         (map_analog_percent_signed((int16_t)initial_chs[MOD_RC_IDX_CH4]) > MOD_RC_CH4_MOMENTARY_ENTER_PCT);
@@ -184,7 +244,8 @@ void ModRcSemantic_ReseedIncremental(ModRcSemantic_Context_t *p_ctx,
                                      int16_t current_deg)
 {
     if (p_ctx == NULL) return;
-    p_ctx->inc_target_deg   = current_deg;
+    p_ctx->inc_target_deg   = clamp_ch1_target_deg(current_deg);
+    p_ctx->inc_target_q8    = (int32_t)p_ctx->inc_target_deg * 256L;
     p_ctx->inc_last_step_ms = 0U;
 }
 
@@ -238,27 +299,19 @@ AraStatus_t ModRcSemantic_Process(ModRcSemantic_Context_t *p_ctx,
     out_data->gripper_angle =
         update_ch4_gripper_momentary(p_ctx,
                                      map_analog_percent_signed((int16_t)channels[MOD_RC_IDX_CH4]));
+    bool se_active = map_2pos(channels[MOD_RC_IDX_SE]);
+    out_data->home_to_zero_pulse = (!p_ctx->se_last_active && se_active);
+    p_ctx->se_last_active = se_active;
 
-    /* ---------------- CH1 incremental stepping ---------------- */
-    {
-        int16_t abs_pct = (ch1_pct >= 0) ? ch1_pct : (int16_t)(-ch1_pct);
+    update_ch1_rate_target(p_ctx,
+                           ch1_pct,
+                           (out_data->req_mode == ARA_MODE_MANUAL) &&
+                           (out_data->estop_state == ESTOP_RELEASED),
+                           current_tick_ms);
 
-        if ((out_data->req_mode == ARA_MODE_MANUAL) &&
-            (out_data->estop_state == ESTOP_RELEASED) &&
-            (abs_pct > MOD_RC_CH1_DEADBAND_PCT)) {
-            if ((uint32_t)(current_tick_ms - p_ctx->inc_last_step_ms) >= MOD_RC_CH1_STEP_INTERVAL_MS) {
-                int32_t deg = (int32_t)p_ctx->inc_target_deg;
-                if (ch1_pct > 0) {
-                    deg += (int32_t)MOD_RC_CH1_STEP_DEG;
-                } else {
-                    deg -= (int32_t)MOD_RC_CH1_STEP_DEG;
-                }
-                if (deg > 180) deg = 180;
-                if (deg < -180) deg = -180;
-                p_ctx->inc_target_deg = (int16_t)deg;
-                p_ctx->inc_last_step_ms = current_tick_ms;
-            }
-        }
+    if (out_data->home_to_zero_pulse) {
+        p_ctx->inc_target_deg = 0;
+        p_ctx->inc_target_q8 = 0;
     }
     out_data->incremental_angle_deg = p_ctx->inc_target_deg;
 
@@ -328,28 +381,11 @@ AraStatus_t ModRcSemantic_ProcessDebugAnalog(ModRcSemantic_Context_t *p_ctx,
     out_data->ch1_percent = map_analog_percent_signed((int16_t)channels[MOD_RC_IDX_CH1]);
     out_data->aux_knob_val = map_analog_permille(channels[MOD_RC_IDX_SF]);
 
-    /* ---------------- CH1 incremental stepping ---------------- */
-    {
-        int16_t ch1_pct = out_data->ch1_percent;
-        int16_t abs_pct = (ch1_pct >= 0) ? ch1_pct : (int16_t)(-ch1_pct);
-
-        if ((out_data->req_mode == (uint8_t)ARA_MODE_MANUAL) &&
-            (out_data->estop_state == (uint8_t)ESTOP_RELEASED) &&
-            (abs_pct > MOD_RC_CH1_DEADBAND_PCT)) {
-            if ((uint32_t)(current_tick_ms - p_ctx->inc_last_step_ms) >= MOD_RC_CH1_STEP_INTERVAL_MS) {
-                int32_t deg = (int32_t)p_ctx->inc_target_deg;
-                if (ch1_pct > 0) {
-                    deg += (int32_t)MOD_RC_CH1_STEP_DEG;
-                } else {
-                    deg -= (int32_t)MOD_RC_CH1_STEP_DEG;
-                }
-                if (deg > 180) deg = 180;
-                if (deg < -180) deg = -180;
-                p_ctx->inc_target_deg = (int16_t)deg;
-                p_ctx->inc_last_step_ms = current_tick_ms;
-            }
-        }
-    }
+    update_ch1_rate_target(p_ctx,
+                           out_data->ch1_percent,
+                           (out_data->req_mode == (uint8_t)ARA_MODE_MANUAL) &&
+                           (out_data->estop_state == (uint8_t)ESTOP_RELEASED),
+                           current_tick_ms);
 
     sb_now = map_3pos(channels[MOD_RC_IDX_SB]);
     out_data->sys_reset_pulse = update_sb_reset_pulse(p_ctx, sb_now, current_tick_ms);

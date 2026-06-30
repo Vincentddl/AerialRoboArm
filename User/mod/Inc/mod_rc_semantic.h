@@ -22,12 +22,11 @@
 #define MOD_RC_SB_PULSE_HOLD_MS      (150U)
 
 /**
- * @brief CH1 incremental step: stick outside deadband triggers a step
- *        immediately, then every STEP_INTERVAL_MS while held.
+ * @brief CH1 rate-integrated target. Stick outside deadband acts like a
+ *        velocity command; target is integrated every control update.
  */
 #define MOD_RC_CH1_DEADBAND_PCT       (15)
-#define MOD_RC_CH1_STEP_INTERVAL_MS   (30U)
-#define MOD_RC_CH1_STEP_DEG           (10)
+#define MOD_RC_CH1_RATE_MAX_DEG_PER_S (500)
 
 /**
  * @brief CH1 threshold for entering EXTEND state.
@@ -58,6 +57,7 @@
 #define MOD_RC_IDX_CH1 0U  /**< CH1: Stick RX axis (main arm incremental intent). */
 #define MOD_RC_IDX_CH4 3U  /**< CH4: Spring-centered gripper servo axis (isolated from CH1/CH2 cross-talk). */
 #define MOD_RC_IDX_SA  4U  /**< CH5: Mode request switch (2-pos). */
+#define MOD_RC_IDX_SE  5U  /**< CH6: Momentary home switch, low idle / high pressed. */
 #define MOD_RC_IDX_SC  6U  /**< CH7: Gripper switch (3-pos). */
 #define MOD_RC_IDX_SF  7U  /**< CH8: Roll attitude wheel. */
 #define MOD_RC_IDX_SB  8U  /**< CH9: System reset switch (3-pos). */
@@ -104,10 +104,12 @@ typedef struct {
     uint8_t     sb_last_pos;       /**< Last decoded SB position. */
     uint32_t    sb_pulse_start_ms; /**< Tick when current SB pulse started. */
     bool        sb_pulse_active;   /**< Whether SB pulse is currently active. */
+    bool        se_last_active;    /**< Last decoded SE home switch state. */
 
     /* CH1 incremental stepping */
-    int16_t     inc_target_deg;    /**< Accumulated incremental target angle. */
-    uint32_t    inc_last_step_ms;  /**< Tick of last step, 0 = take first step immediately. */
+    int16_t     inc_target_deg;    /**< Accumulated target angle, rounded degrees. */
+    int32_t     inc_target_q8;     /**< Accumulated target angle in deg * 256. */
+    uint32_t    inc_last_step_ms;  /**< Tick of last integration update. */
 
     /* CH4 gripper momentary latch */
     bool        ch4_right_active; /**< True while CH4 right command is latched active. */

@@ -301,10 +301,11 @@ static void raw_channel_dump(void)
         BSP_UART_Printf("[RC] link down, no data\r\n");
         return;
     }
-    BSP_UART_Printf("[RC] CH1=%5u CH4=%5u SA=%5u SC=%5u SF=%5u SB=%5u SD=%5u\r\n",
+    BSP_UART_Printf("[RC] CH1=%5u CH4=%5u SA=%5u SE=%5u SC=%5u SF=%5u SB=%5u SD=%5u\r\n",
                     (unsigned)ch[0],   /* CH1 main arm stick */
                     (unsigned)ch[3],   /* CH4 gripper stick */
                     (unsigned)ch[4],   /* CH5  SA mode */
+                    (unsigned)ch[5],   /* CH6  SE home switch */
                     (unsigned)ch[6],   /* CH7  SC gripper switch */
                     (unsigned)ch[7],   /* CH8  SF roll wheel */
                     (unsigned)ch[8],   /* CH9  SB reset pulse */
@@ -335,6 +336,7 @@ static const char *reason_to_str(uint8_t r)
     case ARB_REASON_IDLE_DEFAULT:        return "IDLE       ";
     case ARB_REASON_SERVO_OFFLINE:       return "NO_SERVO   ";
     case ARB_REASON_FAULT_PENDING_RESET: return "WAIT_RESET ";
+    case ARB_REASON_HOME_ZERO:           return "HOME_ZERO  ";
     default:                             return "?          ";
     }
 }

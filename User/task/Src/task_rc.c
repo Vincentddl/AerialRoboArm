@@ -44,6 +44,8 @@ static void TaskRc_GenerateDefaultChannels(uint16_t *p_channels)
 
     /* CH10 / SD: default to ACTIVE for safety. */
     p_channels[MOD_RC_IDX_SD] = (uint16_t)(MOD_RC_SW_LOW - 100U);
+    /* CH6 / SE: momentary home switch defaults released / low. */
+    p_channels[MOD_RC_IDX_SE] = (uint16_t)(MOD_RC_SW_LOW - 100U);
 }
 
 /**
@@ -64,6 +66,7 @@ static void TaskRc_ApplyFailsafeIntent(RcControlData_t *p_out_intent)
     p_out_intent->arm_cmd         = ARM_CMD_HOLD;
     p_out_intent->gripper_cmd     = GRIPPER_CMD_STOP;
     p_out_intent->sys_reset_pulse = false;
+    p_out_intent->home_to_zero_pulse = false;
     p_out_intent->aux_knob_val    = 0U;
 }
 

@@ -40,9 +40,9 @@
 #define TASK_MOTION_ANGLE_MIN_DEG       (-180)  /**< FSUS native: signed, [-180,+180]. */
 #define TASK_MOTION_ANGLE_MAX_DEG       (180)
 
-#define TASK_MOTION_DEFAULT_VELOCITY    (750.0f)/**< deg/s, SDK-clamped maximum for fastest validated HX8 response. */
-#define TASK_MOTION_DEFAULT_T_ACC_MS    (40U)   /**< Fast but non-minimum acceleration for reduced shock/current spikes. */
-#define TASK_MOTION_DEFAULT_T_DEC_MS    (40U)   /**< Fast but non-minimum deceleration for reduced overshoot. */
+#define TASK_MOTION_DEFAULT_VELOCITY    (500.0f)/**< deg/s, faster manual response while keeping a smooth target ramp. */
+#define TASK_MOTION_DEFAULT_T_ACC_MS    (20U)   /**< Protocol minimum ramp for fastest manual response; test with care. */
+#define TASK_MOTION_DEFAULT_T_DEC_MS    (20U)   /**< Protocol minimum ramp for fastest manual response; test with care. */
 #define TASK_MOTION_DEFAULT_POWER_MW    (0U)    /**< 0 = servo auto-calc. */
 #define TASK_MOTION_ONLINE_GRACE_MS     (3000U) /**< Ignore brief telemetry dropouts. */
 #define TASK_MOTION_FEEDBACK_PERIOD_MS  (100U)  /**< ServoMonitor polling period. */

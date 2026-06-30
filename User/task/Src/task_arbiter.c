@@ -111,7 +111,22 @@ void TaskArbiter_Decide(const ArbiterInput_t *in, ArbiterOutput_t *out)
         return;
     }
 
-    /* ----- Rule 5: MANUAL mode (RC up, operator present) ----- */
+    /* ----- Rule 5: Momentary home-to-zero command (SE) ----- */
+    if (rc->home_to_zero_pulse) {
+        out->mode             = ARA_MODE_MANUAL;
+        out->torque_request   = true;
+        out->target_angle_deg = 0;
+        out->target_speed     = 0U;
+        out->target_acc       = 50U;
+        out->gripper_cmd      = rc->gripper_cmd;
+        out->roll_degree      = rc->roll_degree;
+        out->gripper_angle    = rc->gripper_angle;
+        out->led_pattern      = LED_PATTERN_MANUAL_HEARTBEAT;
+        out->reason_code      = ARB_REASON_HOME_ZERO;
+        return;
+    }
+
+    /* ----- Rule 6: MANUAL mode (RC up, operator present) ----- */
     if (rc->req_mode == ARA_MODE_MANUAL) {
         out->mode             = ARA_MODE_MANUAL;
         out->torque_request   = true;
@@ -126,7 +141,7 @@ void TaskArbiter_Decide(const ArbiterInput_t *in, ArbiterOutput_t *out)
         return;
     }
 
-    /* ----- Rule 6: AUTO mode ----- */
+    /* ----- Rule 7: AUTO mode ----- */
     if (rc->req_mode == ARA_MODE_AUTO) {
         const bool vision_fresh = vs->target_present &&
             ((uint32_t)(in->tick_ms - vs->last_update_tick_ms) < vision_stale_ms);
@@ -157,7 +172,7 @@ void TaskArbiter_Decide(const ArbiterInput_t *in, ArbiterOutput_t *out)
         return;
     }
 
-    /* ----- Rule 7: default IDLE ----- */
+    /* ----- Rule 8: default IDLE ----- */
     out->mode           = ARA_MODE_IDLE;
     out->torque_request = false;
     out->led_pattern    = LED_PATTERN_IDLE_SLOW_BLINK;

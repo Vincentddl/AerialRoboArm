@@ -88,6 +88,7 @@ typedef struct {
     AraArmCmd_t     arm_cmd;
     AraGripperCmd_t gripper_cmd;
     bool            sys_reset_pulse; /**< Edge-triggered SB pulse. */
+    bool            home_to_zero_pulse; /**< Edge-triggered SE pulse: command HX8 back to 0 deg. */
     uint16_t        aux_knob_val;    /**< SF, normalised [0, 1000]. */
     int16_t         ch1_percent;           /**< CH1 analog -100..+100, for manual angle. */
     int16_t         incremental_angle_deg; /**< Incremental target accumulated by CH1 steps. */

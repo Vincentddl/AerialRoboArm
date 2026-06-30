@@ -41,7 +41,8 @@ typedef enum {
     ARB_REASON_AUTO_VISION_STALE   = 5,
     ARB_REASON_IDLE_DEFAULT        = 6,
     ARB_REASON_SERVO_OFFLINE       = 7,
-    ARB_REASON_FAULT_PENDING_RESET = 8
+    ARB_REASON_FAULT_PENDING_RESET = 8,
+    ARB_REASON_HOME_ZERO           = 9
 } ArbiterReason_t;
 
 /* ============================================================================
