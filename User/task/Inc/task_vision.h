@@ -15,7 +15,7 @@
 #include "datahub.h"
 
 #ifndef TASK_VISION_USE_H13
-#define TASK_VISION_USE_H13 (0)
+#define TASK_VISION_USE_H13 (1)
 #endif
 
 /**

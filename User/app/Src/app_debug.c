@@ -14,6 +14,7 @@
 #include "bsp_uart.h"
 #include "SEGGER_RTT.h"
 #include "dev_status.h"
+#include "drv_h13.h"
 #include "task_motion.h"   /* TASK_MOTION_ANGLE_MIN_DEG / MAX_DEG */
 #include "task_rc.h"       /* TaskRc_CopyRawChannels */
 #include "task_arbiter.h"  /* ARB_REASON_* enum for human-readable [DBG] */
@@ -372,7 +373,7 @@ static void periodic_snapshot(void)
     int32_t tgt_int = tgt_abs / 10;
     int32_t tgt_frc = tgt_abs % 10;
 
-    BSP_UART_Printf("[DBG] %s %s rc=%d vis=%d pos=%s%d.%d tgt=%s%d.%d load=%d roll=%3u grip=%3u wr=%u rd=%u tx=%lu rx=%lu erx=%lu rec=%lu%s\r\n",
+    BSP_UART_Printf("[DBG] %s %s rc=%d vis=%d pos=%s%d.%d tgt=%s%d.%d load=%d roll=%3u grip=%3u wr=%u rd=%u tx=%lu rx=%lu erx=%lu h13=%lu vf=%lu rec=%lu%s\r\n",
                     mode_to_str((uint8_t)s.current_mode),
                     reason_to_str(s.arbiter_reason_code),
                     (int)s.rc_link_up,
@@ -387,6 +388,8 @@ static void periodic_snapshot(void)
                     (unsigned long)BSP_UART_Fsus_GetTxBytes(),
                     (unsigned long)BSP_UART_Fsus_GetRxBytes(),
                     (unsigned long)BSP_UART_Elrs_GetRxBytes(),
+                    (unsigned long)BSP_UART_H13_GetRxBytes(),
+                    (unsigned long)DrvH13_GetVisionFrames(),
                     (unsigned long)BSP_UART_RxDma_GetRecoveries(),
                     force_on ? " [FORCE]" : "");
 
