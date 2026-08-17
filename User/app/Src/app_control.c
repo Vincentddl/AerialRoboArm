@@ -37,6 +37,7 @@ static volatile uint32_t s_heartbeat_ms     = 0U;
 static ControlPhase_t    s_phase            = CTRL_PHASE_BOOT;
 static uint32_t          s_phase_enter_ms   = 0U;
 static uint32_t          s_ping_attempts    = 0U;
+static float             s_startup_hold_angle_deg = 0.0f;
 
 /* Latest artefacts (kept file-static so we can publish partial snapshots
  * during bring-up phases). */
@@ -63,7 +64,7 @@ static int16_t s_ptk_roll_force_deg    = -1;
  * RC loss); cleared when arbiter signals fault_reset_consumed. */
 static bool    s_fault_latched    = false;
 
-#define APP_CONTROL_STARTUP_HOME_MS (300U)
+#define APP_CONTROL_STARTUP_HOLD_MS (300U)
 
 /* =============================================================================
  * Helpers
@@ -223,7 +224,9 @@ static void step_ping(uint32_t now_ms)
     };
     MotionState_t ms;
     TaskMotion_Update(&probe, now_ms, &ms);
-    if (ms.servo_online) {
+    if (ms.servo_online && ms.feedback_valid) {
+        s_mstate = ms;
+        s_startup_hold_angle_deg = ms.feedback.angle_deg;
         enter_phase(CTRL_PHASE_SERVO_CONFIG, now_ms);
     } else {
         s_ping_attempts++;
@@ -238,9 +241,8 @@ static void step_config(uint32_t now_ms)
 {
     /* Servo configuration is currently a no-op pass-through.
      *
-     * step_ping above has already issued one torque-off WritePos +
-     * ReadFeedback round-trip and confirmed servo_online; that doubles
-     * as a liveness + ID/baud sanity check. Anything beyond that
+     * step_ping above has already issued a torque-off ping plus an absolute
+     * encoder feedback read and confirmed servo_online. Anything beyond that
      * (MODE / MIN / MAX / TORQUE_LIMIT / LOCK validation) would require:
      *   - HX8/FSUS-compatible read helpers in drv_fsus
      *   - a per-register readback against expected defaults
@@ -258,7 +260,7 @@ static void step_config(uint32_t now_ms)
 static void step_enable(uint32_t now_ms)
 {
     s_mcmd.torque_on          = true;
-    s_mcmd.target_angle_deg   = 0.0f;
+    s_mcmd.target_angle_deg   = s_startup_hold_angle_deg;
     s_mcmd.velocity_deg_per_s = TASK_MOTION_DEFAULT_VELOCITY;
     s_mcmd.t_acc_ms           = TASK_MOTION_DEFAULT_T_ACC_MS;
     s_mcmd.t_dec_ms           = TASK_MOTION_DEFAULT_T_DEC_MS;
@@ -266,9 +268,9 @@ static void step_enable(uint32_t now_ms)
     s_mcmd.force_update       = false;
 
     TaskMotion_Update(&s_mcmd, now_ms, &s_mstate);
-    TaskRc_ReseedIncremental(0);
+    TaskRc_ReseedIncremental((int16_t)s_startup_hold_angle_deg);
 
-    if ((uint32_t)(now_ms - s_phase_enter_ms) >= APP_CONTROL_STARTUP_HOME_MS) {
+    if ((uint32_t)(now_ms - s_phase_enter_ms) >= APP_CONTROL_STARTUP_HOLD_MS) {
         enter_phase(CTRL_PHASE_RUNNING, now_ms);
     }
 }
@@ -297,6 +299,19 @@ static void step_running_force(uint32_t now_ms)
 static void step_running_normal(uint32_t now_ms)
 {
     TaskVision_Update(now_ms, &s_vis);
+
+    /* Bumpless AUTO -> MANUAL transfer. During AUTO the CH1 incremental
+     * accumulator is intentionally frozen, so without reseeding it the first
+     * MANUAL tick could command the pre-AUTO angle. Hand control back at the
+     * latest encoder position instead. Update this tick's RC snapshot too so
+     * there is no one-cycle stale command. */
+    if ((s_arb.mode == ARA_MODE_AUTO) &&
+        (s_rc.req_mode == ARA_MODE_MANUAL) &&
+        s_mstate.feedback_valid) {
+        int16_t current_deg = (int16_t)s_mstate.feedback.angle_deg;
+        TaskRc_ReseedIncremental(current_deg);
+        s_rc.incremental_angle_deg = current_deg;
+    }
 
     ArbiterInput_t in = {
         .rc              = &s_rc,
@@ -404,6 +419,7 @@ void App_Control_InitDeps(void)
 
     s_phase          = CTRL_PHASE_BOOT;
     s_phase_enter_ms = 0U;
+    s_startup_hold_angle_deg = 0.0f;
     s_heartbeat_ms   = 0U;
     s_fault_latched  = false;
 }

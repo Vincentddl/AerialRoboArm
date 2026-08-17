@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @file bsp_uart.h
  * @brief UART Driver with ELRS DMA RX, FSUS blocking TX / interrupt RX, and RTT logging.
  *
@@ -20,7 +20,7 @@ typedef enum {
     BSP_UART_DEBUG = 0,
     BSP_UART_ELRS,       /**< ELRS receiver input (USART1). */
     BSP_UART_ST3215,     /**< Legacy enum name; current USART2 bus-servo path is FSUS/HX8. */
-    BSP_UART_H13,        /**< HC13/H13 transparent UART input (USART3). */
+    BSP_UART_HC13,        /**< HC13 transparent UART input (USART3). */
     BSP_UART_NUM
 } BspUart_Dev_t;
 
@@ -91,20 +91,20 @@ uint32_t BSP_UART_Elrs_GetRxBytes(void);
 
 /**
  * @brief Bring-up diagnostics: cumulative bytes received from HC13 on
- *        USART3 and accepted into the H13 parser FIFO.
+ *        USART3 and accepted into the HC13 parser FIFO.
  */
-uint32_t BSP_UART_H13_GetRxBytes(void);
+uint32_t BSP_UART_HC13_GetRxBytes(void);
 
 /**
  * @brief Read raw HC13 bytes mirrored from USART3 RX for bring-up echo tests.
- *        This does not consume bytes from the H13 parser FIFO.
+ *        This does not consume bytes from the HC13 parser FIFO.
  */
-uint16_t BSP_UART_H13_ReadRaw(uint8_t *data, uint16_t len);
+uint16_t BSP_UART_HC13_ReadRaw(uint8_t *data, uint16_t len);
 
 /**
  * @brief Send bytes out through USART3 to the MCU-side HC13 module.
  */
-void BSP_UART_H13_Send(const uint8_t *data, uint16_t len);
+void BSP_UART_HC13_Send(const uint8_t *data, uint16_t len);
 
 /**
  * @brief Bring-up diagnostics: number of circular RX DMA restarts after UART

@@ -14,6 +14,22 @@
 
 static TaskManipulator_Context_t s_ctx;
 
+static float resolve_auto_velocity(uint16_t requested_deg_per_s)
+{
+    if (requested_deg_per_s == 0U) {
+        return TASK_MOTION_AUTO_VELOCITY;
+    }
+
+    float velocity = (float)requested_deg_per_s;
+    if (velocity < TASK_MOTION_AUTO_VELOCITY_MIN) {
+        velocity = TASK_MOTION_AUTO_VELOCITY_MIN;
+    }
+    if (velocity > TASK_MOTION_AUTO_VELOCITY_MAX) {
+        velocity = TASK_MOTION_AUTO_VELOCITY_MAX;
+    }
+    return velocity;
+}
+
 static void enter_state(ManipulatorState_t s, uint32_t tick_ms)
 {
     s_ctx.current_state  = s;
@@ -94,9 +110,11 @@ void TaskManipulator_Update(const ArbiterOutput_t *arb,
 
     case ARA_MODE_AUTO:
         out_cmd->torque_on          = arb->torque_request;
-        out_cmd->velocity_deg_per_s = TASK_MOTION_DEFAULT_VELOCITY;
-        out_cmd->t_acc_ms           = TASK_MOTION_DEFAULT_T_ACC_MS;
-        out_cmd->t_dec_ms           = TASK_MOTION_DEFAULT_T_DEC_MS;
+        /* The HC13 speed field is deg/s. Zero selects the conservative AUTO
+         * default; a non-zero request is bounded before it reaches the servo. */
+        out_cmd->velocity_deg_per_s = resolve_auto_velocity(arb->target_speed);
+        out_cmd->t_acc_ms           = TASK_MOTION_AUTO_T_ACC_MS;
+        out_cmd->t_dec_ms           = TASK_MOTION_AUTO_T_DEC_MS;
         out_cmd->power_mw           = TASK_MOTION_DEFAULT_POWER_MW;
 
         if ((arb->reason_code == ARB_REASON_AUTO_VISION_FRESH) &&

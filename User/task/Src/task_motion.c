@@ -38,10 +38,11 @@ static uint32_t s_mock_last_tick_ms   = 0U;
 
 static float map_angle_to_fsus(float deg)
 {
-    /* Whole stack now operates in the FSUS-native signed -180..+180 domain.
-     * This helper only enforces hardware range; no wrap/translation needed. */
-    if (deg > FSUS_ANGLE_MAX_DEG)       return FSUS_ANGLE_MAX_DEG;
-    if (deg < FSUS_ANGLE_MIN_DEG)       return FSUS_ANGLE_MIN_DEG;
+    /* Final safety boundary shared by every command source (RC, RTT and
+     * HC-13 vision). The protocol supports +/-180 deg, but the mechanism is
+     * deliberately restricted to -100 deg forward .. +100 deg backward. */
+    if (deg > (float)TASK_MOTION_ANGLE_MAX_DEG) return (float)TASK_MOTION_ANGLE_MAX_DEG;
+    if (deg < (float)TASK_MOTION_ANGLE_MIN_DEG) return (float)TASK_MOTION_ANGLE_MIN_DEG;
     return deg;
 }
 
@@ -301,17 +302,23 @@ void TaskMotion_Update(const MotionCmd_t *cmd,
 
     float target_deg = map_angle_to_fsus(cmd->target_angle_deg);
 
-    /* Bring-up probe: match the vendor SDK's first diagnostic step and only
-     * prove ID/baud/electrical reachability. ServoMonitor is still used for
-     * runtime telemetry after the control FSM enters RUNNING. */
+    /* Bring-up probe: first prove ID/baud/electrical reachability, then read
+     * the absolute encoder before torque is enabled. The control FSM uses
+     * this feedback to hold the current physical angle instead of moving to
+     * an assumed zero position during startup. */
     if ((!cmd->torque_on) && cmd->force_update) {
         state->last_write_result = FSUS_PARSE_OK;
         state->last_read_result  = do_ping();
         if (state->last_read_result == FSUS_PARSE_OK) {
-            state->servo_online = true;
-            state->feedback.servo_id     = TASK_MOTION_SERVO_ID;
-            state->feedback.timestamp_ms = tick_ms;
+            state->last_read_result = do_read_feedback(tick_ms, &state->feedback);
+        }
+        if (state->last_read_result == FSUS_PARSE_OK) {
+            state->feedback_valid = true;
+            state->servo_online   = true;
+            s_last_feedback = state->feedback;
+            s_last_feedback_valid = true;
             s_last_feedback_ok_ms = tick_ms;
+            s_last_feedback_poll_ms = tick_ms;
         }
         return;
     }

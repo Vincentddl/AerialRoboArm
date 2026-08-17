@@ -70,7 +70,7 @@ typedef struct {
     bool              torque_request;
     /** Target joint angle in degrees. */
     int16_t           target_angle_deg;
-    /** Target traversal speed, step/s. 0 means servo default. */
+    /** Target traversal speed, deg/s. 0 selects the safe AUTO default. */
     uint16_t          target_speed;
     /** Acceleration register value (0..254). */
     uint8_t           target_acc;
@@ -99,6 +99,9 @@ typedef struct {
  *        is ignored in AUTO mode and the system parks.
  */
 #define ARBITER_DEFAULT_VISION_STALE_MS   (200U)
+
+/** Minimum PC-side detector confidence allowed to drive AUTO motion. */
+#define ARBITER_MIN_VISION_CONFIDENCE     (60U)
 
 /**
  * @brief Sentinel meaning "this output's target_angle_deg is intentionally

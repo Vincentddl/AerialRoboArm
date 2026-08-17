@@ -1,4 +1,4 @@
-/* USER CODE BEGIN Header */
+﻿/* USER CODE BEGIN Header */
 /**
   ******************************************************************************
   * @file           : main.c
@@ -20,6 +20,7 @@
 #include "main.h"
 #include "cmsis_os.h"
 #include "dma.h"
+#include "i2c.h"
 #include "iwdg.h"
 #include "tim.h"
 #include "usart.h"
@@ -100,7 +101,8 @@ int main(void)
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
   MX_DMA_Init();
-  MX_USART3_UART_Init();  /* HC13/H13 transparent UART on PB10/PB11. */
+  MX_I2C1_Init();       /* PB8/PB9 sensor bus; VL53L1X uses address 0x29. */
+  MX_USART3_UART_Init();  /* HC13 transparent UART on PB10/PB11. */
   MX_TIM2_Init();
   MX_USART1_UART_Init();
   MX_USART2_UART_Init();
@@ -109,7 +111,7 @@ int main(void)
     BSP_UART_Init(); // 确保串口先初始化，方便打印 Log
     BSP_PWM_Init();
 
-    /* demo_v7: I2C/AS5600 path removed. ST3215 uses USART2 half-duplex. */
+    /* PB8/PB9 provide the I2C1 sensor bus. */
 
     /* demo_v7: bring up app-layer dependencies before kernel starts. The
      * actual ControlTask / DebugTask are created from RTOS_THREADS in

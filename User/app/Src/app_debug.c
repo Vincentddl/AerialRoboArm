@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @file app_debug.c
  * @brief L5 DebugTask: Console input, DataHub status dump, LED render.
  *
@@ -14,7 +14,9 @@
 #include "bsp_uart.h"
 #include "SEGGER_RTT.h"
 #include "dev_status.h"
-#include "drv_h13.h"
+#include "drv_hc13.h"
+#include "app_tof.h"
+#include "task_tof_gate.h"
 #include "task_motion.h"   /* TASK_MOTION_ANGLE_MIN_DEG / MAX_DEG */
 #include "task_rc.h"       /* TaskRc_CopyRawChannels */
 #include "task_arbiter.h"  /* ARB_REASON_* enum for human-readable [DBG] */
@@ -26,6 +28,14 @@
 #include <string.h>
 
 static osThreadId_t s_debug_handle = NULL;
+
+static const char *range_sensor_to_str(AppRangeSensorKind_t kind)
+{
+    switch (kind) {
+    case APP_RANGE_SENSOR_VL53L1X: return "VL53L1X";
+    default:                       return "unknown";
+    }
+}
 
 /* =============================================================================
  * Console input
@@ -52,13 +62,45 @@ static void console_print_help(void)
         "[DBG] keys:\r\n"
         "  v=mock-vision 120deg/3s   c=clear-vision    f=clear-fault\r\n"
         "  e=force ON (lock 0deg)    k=force OFF\r\n"
-        "  1=goto 0  2=goto 90  3=goto 180\r\n"
+        "  1=goto 0  2=goto 90  3=goto +100 limit\r\n"
         "  +=+10deg  -=-10deg\r\n"
         "  g <deg>=force HX8 to arbitrary angle, eg 'g 47<enter>'\r\n"
         "  p <ch> <deg>=lock PTK (ch 0=grip,1=roll; deg 0..180; -1=release)\r\n"
         "  P=release both PTK channels back to RC\r\n"
         "  r=raw channel dump on/off\r\n"
+        "  t=show latest gripper distance sample\r\n"
         "  ?=this help\r\n");
+}
+
+static void console_read_tof(void)
+{
+    AppTofSnapshot_t snapshot;
+    if (!App_Tof_GetSnapshot(&snapshot)) {
+        BSP_UART_Printf("[TOF] snapshot unavailable\r\n");
+        return;
+    }
+
+    BSP_UART_Printf("[RANGE] %s online=%u id=0x%04X status=%d "
+                    "distance=%u mm valid=%u in_window=%u "
+                    "hits=%u/%u grasp_confirmed=%u range_status=%u "
+                    "signal=%u ambient=%u period=%lu ms samples=%lu errors=%lu tick=%lu\r\n",
+                    range_sensor_to_str(snapshot.sensor_kind),
+                    snapshot.online ? 1U : 0U,
+                    (unsigned)snapshot.sensor_id,
+                    (int)snapshot.last_status,
+                    (unsigned)snapshot.distance_mm,
+                    snapshot.measurement_valid ? 1U : 0U,
+                    snapshot.in_window ? 1U : 0U,
+                    (unsigned)snapshot.consecutive_hits,
+                    (unsigned)TASK_TOF_GATE_REQUIRED_SAMPLES,
+                    snapshot.grasp_confirmed ? 1U : 0U,
+                    (unsigned)snapshot.range_status,
+                    (unsigned)snapshot.signal_rate_kcps,
+                    (unsigned)snapshot.ambient_rate_kcps,
+                    (unsigned long)snapshot.measured_period_ms,
+                    (unsigned long)snapshot.sample_count,
+                    (unsigned long)snapshot.error_count,
+                    (unsigned long)snapshot.sample_timestamp_ms);
 }
 
 static void console_send_force(int16_t angle_deg, bool enable)
@@ -219,7 +261,7 @@ static void console_poll(uint32_t tick_ms)
             console_send_force(90, true);
             break;
         case '3':
-            console_send_force(180, true);
+            console_send_force(TASK_MOTION_ANGLE_MAX_DEG, true);
             break;
         case '+': {
             int32_t a = (int32_t)s_console_force_angle + 10;
@@ -254,6 +296,9 @@ static void console_poll(uint32_t tick_ms)
             s_raw_dump_active = !s_raw_dump_active;
             BSP_UART_Printf("[DBG] raw channel dump %s\r\n",
                             s_raw_dump_active ? "ON (1 Hz)" : "OFF");
+            break;
+        case 't':
+            console_read_tof();
             break;
         case '?':
             console_print_help();
@@ -373,7 +418,7 @@ static void periodic_snapshot(void)
     int32_t tgt_int = tgt_abs / 10;
     int32_t tgt_frc = tgt_abs % 10;
 
-    BSP_UART_Printf("[DBG] %s %s rc=%d vis=%d pos=%s%d.%d tgt=%s%d.%d load=%d roll=%3u grip=%3u wr=%u rd=%u tx=%lu rx=%lu erx=%lu h13=%lu vf=%lu rec=%lu%s\r\n",
+    BSP_UART_Printf("[DBG] %s %s rc=%d vis=%d pos=%s%d.%d tgt=%s%d.%d load=%d roll=%3u grip=%3u wr=%u rd=%u tx=%lu rx=%lu erx=%lu hc13=%lu vf=%lu rec=%lu%s\r\n",
                     mode_to_str((uint8_t)s.current_mode),
                     reason_to_str(s.arbiter_reason_code),
                     (int)s.rc_link_up,
@@ -388,8 +433,8 @@ static void periodic_snapshot(void)
                     (unsigned long)BSP_UART_Fsus_GetTxBytes(),
                     (unsigned long)BSP_UART_Fsus_GetRxBytes(),
                     (unsigned long)BSP_UART_Elrs_GetRxBytes(),
-                    (unsigned long)BSP_UART_H13_GetRxBytes(),
-                    (unsigned long)DrvH13_GetVisionFrames(),
+                    (unsigned long)BSP_UART_HC13_GetRxBytes(),
+                    (unsigned long)DrvHC13_GetVisionFrames(),
                     (unsigned long)BSP_UART_RxDma_GetRecoveries(),
                     force_on ? " [FORCE]" : "");
 

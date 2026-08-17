@@ -1,9 +1,9 @@
-/**
- * @file drv_h13.c
- * @brief L2 Driver: H13/HC-13 transparent UART link and vision parser.
+﻿/**
+ * @file drv_hc13.c
+ * @brief L2 Driver: HC-13 transparent UART link and vision parser.
  */
 
-#include "drv_h13.h"
+#include "drv_hc13.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -12,14 +12,14 @@
  * RX FIFO
  * ========================================================================== */
 
-static uint8_t  s_rx_buf[H13_RX_BUF_SIZE];
+static uint8_t  s_rx_buf[HC13_RX_BUF_SIZE];
 static volatile uint16_t s_rx_head = 0U;   /* ISR/BSP writes */
 static uint16_t s_rx_tail = 0U;            /* task reads */
 
-static char     s_line_buf[H13_LINE_BUF_SIZE];
+static char     s_line_buf[HC13_LINE_BUF_SIZE];
 static uint16_t s_line_len = 0U;
 
-static H13VisionSample_t s_latest;
+static HC13VisionSample_t s_latest;
 static uint32_t s_rx_bytes = 0U;
 static uint32_t s_vision_frames = 0U;
 
@@ -98,7 +98,11 @@ static bool parse_vision_line(char *line, uint32_t now_ms)
     }
 
     s_latest.target_present    = true;
-    s_latest.target_angle_deg  = clamp_i16(angle, -180, 180);
+    /* HC-13 carries absolute HX8 g commands. Clamp at reception as an early
+     * guard; TaskMotion applies the same mechanical limit again at output. */
+    s_latest.target_angle_deg  = clamp_i16(angle,
+                                           ARA_MAIN_ARM_ANGLE_MIN_DEG,
+                                           ARA_MAIN_ARM_ANGLE_MAX_DEG);
     s_latest.target_speed      = clamp_u16(speed, 65535U);
     s_latest.confidence        = clamp_u8(conf, 100U);
     s_latest.timestamp_ms      = now_ms;
@@ -121,7 +125,7 @@ static void consume_parser_byte(uint8_t byte, uint32_t now_ms)
         return;
     }
 
-    if (s_line_len < (H13_LINE_BUF_SIZE - 1U)) {
+    if (s_line_len < (HC13_LINE_BUF_SIZE - 1U)) {
         s_line_buf[s_line_len++] = (char)byte;
     } else {
         /* Drop an overlong line and wait for the next newline. */
@@ -133,7 +137,7 @@ static void consume_parser_byte(uint8_t byte, uint32_t now_ms)
  * Public API
  * ========================================================================== */
 
-void DrvH13_Init(void)
+void DrvHC13_Init(void)
 {
     s_rx_head = 0U;
     s_rx_tail = 0U;
@@ -143,10 +147,10 @@ void DrvH13_Init(void)
     s_vision_frames = 0U;
 }
 
-uint16_t DrvH13_BuildSetAirRateCmd(H13AirRate_t rate, uint8_t *out, uint16_t len)
+uint16_t DrvHC13_BuildSetAirRateCmd(HC13AirRate_t rate, uint8_t *out, uint16_t len)
 {
     if ((out == NULL) || (len < 7U) ||
-        (rate < H13_AIR_RATE_S1) || (rate > H13_AIR_RATE_S7)) {
+        (rate < HC13_AIR_RATE_S1) || (rate > HC13_AIR_RATE_S7)) {
         return 0U;
     }
 
@@ -160,14 +164,14 @@ uint16_t DrvH13_BuildSetAirRateCmd(H13AirRate_t rate, uint8_t *out, uint16_t len
     return 7U;
 }
 
-uint16_t DrvH13_BuildSetS7Cmd(uint8_t *out, uint16_t len)
+uint16_t DrvHC13_BuildSetS7Cmd(uint8_t *out, uint16_t len)
 {
-    return DrvH13_BuildSetAirRateCmd(H13_AIR_RATE_S7, out, len);
+    return DrvHC13_BuildSetAirRateCmd(HC13_AIR_RATE_S7, out, len);
 }
 
-void DrvH13_PushRxByte(uint8_t byte)
+void DrvHC13_PushRxByte(uint8_t byte)
 {
-    uint16_t next = (uint16_t)((s_rx_head + 1U) % H13_RX_BUF_SIZE);
+    uint16_t next = (uint16_t)((s_rx_head + 1U) % HC13_RX_BUF_SIZE);
     if (next != s_rx_tail) {
         s_rx_buf[s_rx_head] = byte;
         s_rx_head = next;
@@ -175,7 +179,7 @@ void DrvH13_PushRxByte(uint8_t byte)
     }
 }
 
-uint16_t DrvH13_Recv(uint8_t *data, uint16_t len)
+uint16_t DrvHC13_Recv(uint8_t *data, uint16_t len)
 {
     if ((data == NULL) || (len == 0U)) {
         return 0U;
@@ -184,26 +188,26 @@ uint16_t DrvH13_Recv(uint8_t *data, uint16_t len)
     uint16_t count = 0U;
     while ((count < len) && (s_rx_tail != s_rx_head)) {
         data[count++] = s_rx_buf[s_rx_tail];
-        s_rx_tail = (uint16_t)((s_rx_tail + 1U) % H13_RX_BUF_SIZE);
+        s_rx_tail = (uint16_t)((s_rx_tail + 1U) % HC13_RX_BUF_SIZE);
     }
     return count;
 }
 
-void DrvH13_Flush(void)
+void DrvHC13_Flush(void)
 {
     s_rx_tail = s_rx_head;
     s_line_len = 0U;
 }
 
-bool DrvH13_PollVision(uint32_t now_ms, H13VisionSample_t *out)
+bool DrvHC13_PollVision(uint32_t now_ms, HC13VisionSample_t *out)
 {
     uint8_t byte = 0U;
-    while (DrvH13_Recv(&byte, 1U) == 1U) {
+    while (DrvHC13_Recv(&byte, 1U) == 1U) {
         consume_parser_byte(byte, now_ms);
     }
 
     bool fresh = s_latest.target_present &&
-                 ((uint32_t)(now_ms - s_latest.timestamp_ms) <= H13_VISION_TTL_MS);
+                 ((uint32_t)(now_ms - s_latest.timestamp_ms) <= HC13_VISION_TTL_MS);
 
     if (fresh) {
         if (out != NULL) {
@@ -218,12 +222,12 @@ bool DrvH13_PollVision(uint32_t now_ms, H13VisionSample_t *out)
     return false;
 }
 
-uint32_t DrvH13_GetRxBytes(void)
+uint32_t DrvHC13_GetRxBytes(void)
 {
     return s_rx_bytes;
 }
 
-uint32_t DrvH13_GetVisionFrames(void)
+uint32_t DrvHC13_GetVisionFrames(void)
 {
     return s_vision_frames;
 }

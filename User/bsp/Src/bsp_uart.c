@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @file bsp_uart.c
  * @brief UART Driver: FSUS interrupt-RX / blocking-TX on USART2,
  *        DMA ring buffer on USART1, debug printf over SEGGER RTT.
@@ -6,7 +6,7 @@
 
 #include "bsp_uart.h"
 #include "SEGGER_RTT.h"
-#include "drv_h13.h"
+#include "drv_hc13.h"
 #include "stm32f1xx_hal.h"
 #include <stdio.h>
 #include <stdarg.h>
@@ -19,7 +19,7 @@
 /* --- Configuration --- */
 #define UART_ELRS_RX_BUF_SIZE    (1024U)
 #define UART_FSUS_RX_BUF_SIZE    (256U)
-#define UART_H13_RAW_BUF_SIZE    (256U)
+#define UART_HC13_RAW_BUF_SIZE    (256U)
 #define UART_TX_TIMEOUT_MS       (100U)
 
 /* Half-duplex notification bits (legacy ST3215 HD state machine, archived driver). */
@@ -55,17 +55,19 @@ static uint8_t  s_fsus_rx_buf[UART_FSUS_RX_BUF_SIZE];
 static volatile uint16_t s_fsus_rx_head = 0U;  /* ISR writes */
 static uint16_t s_fsus_rx_tail = 0U;           /* task reads */
 static uint8_t  s_fsus_rx_byte;                /* 1-byte IT target */
-static uint8_t  s_h13_raw_buf[UART_H13_RAW_BUF_SIZE];
-static volatile uint16_t s_h13_raw_head = 0U;  /* ISR writes */
-static uint16_t s_h13_raw_tail = 0U;           /* task reads */
-static uint8_t  s_h13_rx_byte;                 /* 1-byte IT target */
-static char tx_buf[128];                // 发送缓冲区 (由信号量保护)
+static uint8_t  s_hc13_raw_buf[UART_HC13_RAW_BUF_SIZE];
+static volatile uint16_t s_hc13_raw_head = 0U;  /* ISR writes */
+static uint16_t s_hc13_raw_tail = 0U;           /* task reads */
+static uint8_t  s_hc13_rx_byte;                 /* 1-byte IT target */
+/* Long periodic snapshots include HC13/vision counters and exceed 128 bytes.
+ * Keep enough room for one complete line so diagnostics do not truncate. */
+static char tx_buf[256];                // 发送缓冲区 (由信号量保护)
 
 /* Bring-up diagnostics: TX/RX byte counters visible to upper layers. */
 static volatile uint32_t s_fsus_tx_bytes = 0U;
 static volatile uint32_t s_fsus_rx_bytes = 0U;
 static volatile uint32_t s_elrs_rx_bytes = 0U;
-static volatile uint32_t s_h13_rx_bytes = 0U;
+static volatile uint32_t s_hc13_rx_bytes = 0U;
 static volatile uint32_t s_uart_rx_dma_recoveries = 0U;
 
 /* =============================================================================
@@ -132,16 +134,22 @@ static void RestartCircularDmaRx(BspUart_Dev_t dev)
 /* Low-latency bring-up echo for HC13.
  * Runs inside USART3 RX complete callback after a newline is received. It uses
  * direct TXE polling instead of HAL_UART_Transmit so the echo is not delayed by
- * a 100 ms debug task period. */
-#define H13_IRQ_ECHO_LINE_MAX      (64U)
-#define H13_IRQ_ECHO_SPIN_LIMIT    (20000U)
+ * a 100 ms debug task period. Keep disabled in normal control builds: polling
+ * TX inside the RX ISR adds latency and doubles HC-13 air traffic. */
+#ifndef HC13_IRQ_ECHO_ENABLE
+#define HC13_IRQ_ECHO_ENABLE        (0U)
+#endif
 
-static char    s_h13_irq_echo_line[H13_IRQ_ECHO_LINE_MAX];
-static uint8_t s_h13_irq_echo_len = 0U;
+#if HC13_IRQ_ECHO_ENABLE
+#define HC13_IRQ_ECHO_LINE_MAX      (64U)
+#define HC13_IRQ_ECHO_SPIN_LIMIT    (20000U)
 
-static void H13_IrqEchoSendByte(uint8_t byte)
+static char    s_hc13_irq_echo_line[HC13_IRQ_ECHO_LINE_MAX];
+static uint8_t s_hc13_irq_echo_len = 0U;
+
+static void HC13_IrqEchoSendByte(uint8_t byte)
 {
-    uint32_t guard = H13_IRQ_ECHO_SPIN_LIMIT;
+    uint32_t guard = HC13_IRQ_ECHO_SPIN_LIMIT;
     while (((USART3->SR & USART_SR_TXE) == 0U) && (guard-- > 0U)) {
     }
     if (guard == 0U) {
@@ -150,46 +158,47 @@ static void H13_IrqEchoSendByte(uint8_t byte)
     USART3->DR = byte;
 }
 
-static void H13_IrqEchoSendBuffer(const uint8_t *data, uint16_t len)
+static void HC13_IrqEchoSendBuffer(const uint8_t *data, uint16_t len)
 {
     if (data == NULL) {
         return;
     }
     for (uint16_t i = 0U; i < len; i++) {
-        H13_IrqEchoSendByte(data[i]);
+        HC13_IrqEchoSendByte(data[i]);
     }
 }
 
-static void H13_IrqEchoFlushLine(void)
+static void HC13_IrqEchoFlushLine(void)
 {
     static const uint8_t prefix[] = "RX:";
     static const uint8_t suffix[] = "\r\n";
 
-    if (s_h13_irq_echo_len == 0U) {
+    if (s_hc13_irq_echo_len == 0U) {
         return;
     }
 
-    H13_IrqEchoSendBuffer(prefix, (uint16_t)(sizeof(prefix) - 1U));
-    H13_IrqEchoSendBuffer((const uint8_t *)s_h13_irq_echo_line, s_h13_irq_echo_len);
-    H13_IrqEchoSendBuffer(suffix, (uint16_t)(sizeof(suffix) - 1U));
-    s_h13_irq_echo_len = 0U;
+    HC13_IrqEchoSendBuffer(prefix, (uint16_t)(sizeof(prefix) - 1U));
+    HC13_IrqEchoSendBuffer((const uint8_t *)s_hc13_irq_echo_line, s_hc13_irq_echo_len);
+    HC13_IrqEchoSendBuffer(suffix, (uint16_t)(sizeof(suffix) - 1U));
+    s_hc13_irq_echo_len = 0U;
 }
 
-static void H13_IrqEchoConsumeByte(uint8_t byte)
+static void HC13_IrqEchoConsumeByte(uint8_t byte)
 {
     if (byte == '\r') {
         return;
     }
     if (byte == '\n') {
-        H13_IrqEchoFlushLine();
+        HC13_IrqEchoFlushLine();
         return;
     }
-    if (s_h13_irq_echo_len < (H13_IRQ_ECHO_LINE_MAX - 1U)) {
-        s_h13_irq_echo_line[s_h13_irq_echo_len++] = (char)byte;
+    if (s_hc13_irq_echo_len < (HC13_IRQ_ECHO_LINE_MAX - 1U)) {
+        s_hc13_irq_echo_line[s_hc13_irq_echo_len++] = (char)byte;
     } else {
-        s_h13_irq_echo_len = 0U;
+        s_hc13_irq_echo_len = 0U;
     }
 }
+#endif
 
 /* --- API Implementation --- */
 
@@ -199,14 +208,14 @@ void BSP_UART_Init(void)
     uart_ctx[BSP_UART_DEBUG].huart  = &huart3;
     uart_ctx[BSP_UART_ELRS].huart   = &huart1;
     uart_ctx[BSP_UART_ST3215].huart = &huart2;   /* FSUS, full-duplex IT RX */
-    uart_ctx[BSP_UART_H13].huart    = &huart3;   /* HC13/H13, transparent RX */
+    uart_ctx[BSP_UART_HC13].huart    = &huart3;   /* HC13, transparent RX */
 
     uart_ctx[BSP_UART_DEBUG].rx_buffer       = NULL;
     uart_ctx[BSP_UART_DEBUG].rx_buffer_size  = 0U;
     uart_ctx[BSP_UART_ELRS].rx_buffer        = s_elrs_rx_buffer;
     uart_ctx[BSP_UART_ELRS].rx_buffer_size   = sizeof(s_elrs_rx_buffer);
-    uart_ctx[BSP_UART_H13].rx_buffer         = NULL;
-    uart_ctx[BSP_UART_H13].rx_buffer_size    = 0U;
+    uart_ctx[BSP_UART_HC13].rx_buffer         = NULL;
+    uart_ctx[BSP_UART_HC13].rx_buffer_size    = 0U;
 
     /* Initialize per-port software state. */
     for (int i = 0; i < BSP_UART_NUM; i++) {
@@ -224,9 +233,9 @@ void BSP_UART_Init(void)
      *     One byte per interrupt, pushed to s_fsus_rx_buf in the ISR. */
     HAL_UART_Receive_IT(&huart2, &s_fsus_rx_byte, 1);
 
-    /* 4. Start interrupt-based RX on USART3 (HC13/H13).
-     *     One byte per interrupt, pushed directly into the H13 parser FIFO. */
-    HAL_UART_Receive_IT(&huart3, &s_h13_rx_byte, 1);
+    /* 4. Start interrupt-based RX on USART3 (HC13).
+     *     One byte per interrupt, pushed directly into the HC13 parser FIFO. */
+    HAL_UART_Receive_IT(&huart3, &s_hc13_rx_byte, 1);
 
     /* 5. Half-duplex context init (legacy, kept for reference). */
     memset(&s_hd_ctx, 0, sizeof(s_hd_ctx));
@@ -243,9 +252,15 @@ void BSP_UART_Printf(const char *format, ...)
     va_end(args);
 
     if (len > 0) {
+        /* vsnprintf returns the length that would have been written. Clamp it
+         * to the bytes actually present; otherwise a truncated message causes
+         * SEGGER_RTT_Write to read beyond tx_buf and print adjacent memory. */
+        unsigned write_len = ((unsigned)len < sizeof(tx_buf))
+                                 ? (unsigned)len
+                                 : (unsigned)(sizeof(tx_buf) - 1U);
         /* RTT channel 0: terminal output. NO_BLOCK_SKIP mode drops data
          * silently when PC-side RTT Viewer is not connected. */
-        (void)SEGGER_RTT_Write(0, tx_buf, (unsigned)len);
+        (void)SEGGER_RTT_Write(0, tx_buf, write_len);
     }
 }
 
@@ -442,17 +457,19 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
         return;
     }
 
-    /* HC13/H13 (USART3): forward transparent-mode bytes to drv_h13. */
-    if (huart == uart_ctx[BSP_UART_H13].huart) {
-        DrvH13_PushRxByte(s_h13_rx_byte);
-        H13_IrqEchoConsumeByte(s_h13_rx_byte);
-        uint16_t next = (uint16_t)((s_h13_raw_head + 1U) % UART_H13_RAW_BUF_SIZE);
-        if (next != s_h13_raw_tail) {
-            s_h13_raw_buf[s_h13_raw_head] = s_h13_rx_byte;
-            s_h13_raw_head = next;
+    /* HC13 (USART3): forward transparent-mode bytes to drv_hc13. */
+    if (huart == uart_ctx[BSP_UART_HC13].huart) {
+        DrvHC13_PushRxByte(s_hc13_rx_byte);
+#if HC13_IRQ_ECHO_ENABLE
+        HC13_IrqEchoConsumeByte(s_hc13_rx_byte);
+#endif
+        uint16_t next = (uint16_t)((s_hc13_raw_head + 1U) % UART_HC13_RAW_BUF_SIZE);
+        if (next != s_hc13_raw_tail) {
+            s_hc13_raw_buf[s_hc13_raw_head] = s_hc13_rx_byte;
+            s_hc13_raw_head = next;
         }
-        s_h13_rx_bytes++;
-        HAL_UART_Receive_IT(huart, &s_h13_rx_byte, 1);
+        s_hc13_rx_bytes++;
+        HAL_UART_Receive_IT(huart, &s_hc13_rx_byte, 1);
         return;
     }
 
@@ -492,9 +509,9 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
         return;
     }
 
-    /* HC13/H13 (USART3): re-arm single-byte RX after noise/framing/overrun. */
-    if (huart == uart_ctx[BSP_UART_H13].huart) {
-        HAL_UART_Receive_IT(huart, &s_h13_rx_byte, 1);
+    /* HC13 (USART3): re-arm single-byte RX after noise/framing/overrun. */
+    if (huart == uart_ctx[BSP_UART_HC13].huart) {
+        HAL_UART_Receive_IT(huart, &s_hc13_rx_byte, 1);
         return;
     }
 
@@ -541,23 +558,23 @@ void BSP_UART_Fsus_Flush(void)
 
 uint32_t BSP_UART_Fsus_GetTxBytes(void) { return s_fsus_tx_bytes; }
 uint32_t BSP_UART_Fsus_GetRxBytes(void) { return s_fsus_rx_bytes; }
-uint32_t BSP_UART_H13_GetRxBytes(void) { return s_h13_rx_bytes; }
+uint32_t BSP_UART_HC13_GetRxBytes(void) { return s_hc13_rx_bytes; }
 
-uint16_t BSP_UART_H13_ReadRaw(uint8_t *data, uint16_t len)
+uint16_t BSP_UART_HC13_ReadRaw(uint8_t *data, uint16_t len)
 {
     if ((data == NULL) || (len == 0U)) {
         return 0U;
     }
 
     uint16_t count = 0U;
-    while ((count < len) && (s_h13_raw_tail != s_h13_raw_head)) {
-        data[count++] = s_h13_raw_buf[s_h13_raw_tail];
-        s_h13_raw_tail = (uint16_t)((s_h13_raw_tail + 1U) % UART_H13_RAW_BUF_SIZE);
+    while ((count < len) && (s_hc13_raw_tail != s_hc13_raw_head)) {
+        data[count++] = s_hc13_raw_buf[s_hc13_raw_tail];
+        s_hc13_raw_tail = (uint16_t)((s_hc13_raw_tail + 1U) % UART_HC13_RAW_BUF_SIZE);
     }
     return count;
 }
 
-void BSP_UART_H13_Send(const uint8_t *data, uint16_t len)
+void BSP_UART_HC13_Send(const uint8_t *data, uint16_t len)
 {
     if ((data == NULL) || (len == 0U)) {
         return;

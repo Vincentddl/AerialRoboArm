@@ -35,6 +35,7 @@
 #include "app_control.h"
 #include "app_debug.h"
 #include "app_housekeeping.h"
+#include "app_tof.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -115,6 +116,7 @@ void MX_FREERTOS_Init(void) {
   /* demo_v7: create application threads. defaultTask above continues to run
    * App_Housekeeping_Step at 1Hz; ControlTask and DebugTask are created here. */
   App_Control_Init();
+  App_Tof_Init();
   App_Debug_Init();
   /* USER CODE END RTOS_THREADS */
 

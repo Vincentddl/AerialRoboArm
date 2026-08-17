@@ -37,13 +37,18 @@
 
 #define TASK_MOTION_SERVO_ID            (0U)    /**< Default FSUS servo ID. */
 
-#define TASK_MOTION_ANGLE_MIN_DEG       (-180)  /**< FSUS native: signed, [-180,+180]. */
-#define TASK_MOTION_ANGLE_MAX_DEG       (180)
+#define TASK_MOTION_ANGLE_MIN_DEG       ARA_MAIN_ARM_ANGLE_MIN_DEG /**< Forward mechanical limit. */
+#define TASK_MOTION_ANGLE_MAX_DEG       ARA_MAIN_ARM_ANGLE_MAX_DEG /**< Backward mechanical limit. */
 
 #define TASK_MOTION_DEFAULT_VELOCITY    (500.0f)/**< deg/s, faster manual response while keeping a smooth target ramp. */
 #define TASK_MOTION_DEFAULT_T_ACC_MS    (20U)   /**< Protocol minimum ramp for fastest manual response; test with care. */
 #define TASK_MOTION_DEFAULT_T_DEC_MS    (20U)   /**< Protocol minimum ramp for fastest manual response; test with care. */
 #define TASK_MOTION_DEFAULT_POWER_MW    (0U)    /**< 0 = servo auto-calc. */
+#define TASK_MOTION_AUTO_VELOCITY       (80.0f) /**< Conservative first-stage vision AUTO speed. */
+#define TASK_MOTION_AUTO_VELOCITY_MIN   (20.0f) /**< Lowest accepted non-zero HC13 AUTO speed. */
+#define TASK_MOTION_AUTO_VELOCITY_MAX   (200.0f)/**< Safety cap for HC13 AUTO speed commands. */
+#define TASK_MOTION_AUTO_T_ACC_MS       (200U)  /**< Smooth AUTO acceleration for bench validation. */
+#define TASK_MOTION_AUTO_T_DEC_MS       (200U)  /**< Smooth AUTO deceleration for bench validation. */
 #define TASK_MOTION_ONLINE_GRACE_MS     (3000U) /**< Ignore brief telemetry dropouts. */
 #define TASK_MOTION_FEEDBACK_PERIOD_MS  (100U)  /**< ServoMonitor polling period. */
 
@@ -53,7 +58,7 @@
 
 typedef struct {
     bool     torque_on;              /**< false = send Stop(unlock). */
-    float    target_angle_deg;       /**< Commanded angle, -180..+180. */
+    float    target_angle_deg;       /**< Commanded angle, clamped to -100..+100. */
     float    velocity_deg_per_s;     /**< Traverse speed. */
     uint16_t t_acc_ms;               /**< Accel time, >= 20. */
     uint16_t t_dec_ms;               /**< Decel time, >= 20. */

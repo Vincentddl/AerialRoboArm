@@ -1,12 +1,14 @@
-/**
+﻿/**
  * @file task_vision.c
  * @brief Vision runnable for demo_v7.
  */
 
 #include "task_vision.h"
 
-#if TASK_VISION_USE_H13
-#include "drv_h13.h"
+#if TASK_VISION_USE_HC13
+#include "bsp_uart.h"
+#include "drv_hc13.h"
+#include <stdio.h>
 #endif
 
 #include "FreeRTOS.h"
@@ -19,6 +21,17 @@ static struct {
     uint32_t mock_injected_ms;
 } s_vision;
 
+#if TASK_VISION_USE_HC13
+/*
+ * Return a low-rate application acknowledgement to the PC.  This confirms
+ * that a complete V command passed the MCU parser; it does not claim that the
+ * servo has already reached the requested angle.
+ */
+#define TASK_VISION_ACK_PERIOD_MS (200U)
+static uint32_t s_last_ack_ms;
+static uint32_t s_last_ack_frame;
+#endif
+
 void TaskVision_Init(void)
 {
     taskENTER_CRITICAL();
@@ -28,8 +41,10 @@ void TaskVision_Init(void)
     s_vision.mock_injected_ms = 0U;
     taskEXIT_CRITICAL();
 
-#if TASK_VISION_USE_H13
-    DrvH13_Init();
+#if TASK_VISION_USE_HC13
+    DrvHC13_Init();
+    s_last_ack_ms    = 0U;
+    s_last_ack_frame = 0U;
 #endif
 }
 
@@ -61,14 +76,32 @@ void TaskVision_Update(uint32_t tick_ms, VisionIntent_t *out)
         return;
     }
 
-#if TASK_VISION_USE_H13
-    H13VisionSample_t h13;
-    if (DrvH13_PollVision(tick_ms, &h13)) {
-        out->target_present       = h13.target_present;
-        out->target_angle_deg     = h13.target_angle_deg;
-        out->target_speed         = h13.target_speed;
-        out->confidence           = h13.confidence;
-        out->last_update_tick_ms  = h13.timestamp_ms;
+#if TASK_VISION_USE_HC13
+    HC13VisionSample_t hc13;
+    if (DrvHC13_PollVision(tick_ms, &hc13)) {
+        const uint32_t frame_count = DrvHC13_GetVisionFrames();
+        if ((frame_count != s_last_ack_frame) &&
+            ((s_last_ack_frame == 0U) ||
+             ((uint32_t)(tick_ms - s_last_ack_ms) >= TASK_VISION_ACK_PERIOD_MS))) {
+            char ack[48];
+            const int ack_len = snprintf(ack,
+                                         sizeof(ack),
+                                         "ACK,%lu,%d,%u\r\n",
+                                         (unsigned long)frame_count,
+                                         (int)hc13.target_angle_deg,
+                                         (unsigned int)hc13.confidence);
+            if ((ack_len > 0) && ((size_t)ack_len < sizeof(ack))) {
+                BSP_UART_HC13_Send((const uint8_t *)ack, (uint16_t)ack_len);
+                s_last_ack_ms    = tick_ms;
+                s_last_ack_frame = frame_count;
+            }
+        }
+
+        out->target_present       = hc13.target_present;
+        out->target_angle_deg     = hc13.target_angle_deg;
+        out->target_speed         = hc13.target_speed;
+        out->confidence           = hc13.confidence;
+        out->last_update_tick_ms  = hc13.timestamp_ms;
         return;
     }
 #endif

@@ -65,6 +65,7 @@ list(FILTER SOURCES EXCLUDE REGEX ".*User/archive/.*$")
 list(FILTER SOURCES EXCLUDE REGEX ".*test_console_drvtest\\.c$")
 list(FILTER SOURCES EXCLUDE REGEX ".*app_threads\\.(c|h)$")
 list(FILTER SOURCES EXCLUDE REGEX ".*app_testbench\\.(c|h)$")
+list(FILTER SOURCES EXCLUDE REGEX ".*drv_vl53l0x\\.(c|h)$")
 list(FILTER SOURCES EXCLUDE REGEX ".*tests/.*$")
 
 set(LINKER_SCRIPT ${CMAKE_SOURCE_DIR}/STM32F103C8TX_FLASH.ld)

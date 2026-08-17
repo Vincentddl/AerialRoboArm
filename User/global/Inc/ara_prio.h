@@ -15,6 +15,7 @@
  * Lattice (high to low):
  *   ARA_PRIO_CONTROL       = osPriorityAboveNormal (32)
  *   ARA_PRIO_HOUSEKEEPING  = osPriorityNormal      (24)   <- defaultTask
+ *   ARA_PRIO_TOF           = osPriorityBelowNormal (16)
  *   ARA_PRIO_DEBUG         = osPriorityLow         ( 8)
  *   tskIDLE_PRIORITY       =                       ( 0)
  *
@@ -41,6 +42,9 @@
 /** Debug / console / telemetry. May be pre-empted by control freely. */
 #define ARA_PRIO_DEBUG            (osPriorityLow)
 
+/** Gripper ToF acquisition. Below control, above console telemetry. */
+#define ARA_PRIO_TOF              (osPriorityBelowNormal)
+
 /* ============================================================================
  * Task stack sizes (in CMSIS-OS bytes, not FreeRTOS words)
  * ========================================================================== */
@@ -51,6 +55,9 @@
 /** DebugTask: printf format buffers dominate. */
 #define ARA_STACK_DEBUG_BYTES          (1024U)   /* 256 words */
 
+/** ToF task: ST ULD calls plus a small measurement snapshot. */
+#define ARA_STACK_TOF_BYTES            ( 768U)   /* 192 words */
+
 /** Housekeeping: minimal, only watchdog refresh + statistics. */
 #define ARA_STACK_HOUSEKEEPING_BYTES   ( 512U)   /* 128 words; matches CubeMX defaultTask */
 
@@ -60,6 +67,7 @@
 
 #define ARA_PERIOD_CONTROL_MS          (20U)    /* 50 Hz */
 #define ARA_PERIOD_DEBUG_MS            (100U)   /* 10 Hz */
+#define ARA_PERIOD_TOF_POLL_MS         (2U)     /* data-ready polling */
 #define ARA_PERIOD_HOUSEKEEPING_MS     (1000U)  /*  1 Hz */
 
 /* ============================================================================

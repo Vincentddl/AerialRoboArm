@@ -1,11 +1,11 @@
-/**
+﻿/**
  * @file task_vision.h
  * @brief L4 Vision input runnable.
  *
  * Produces VisionIntent_t samples for the Arbiter.
  *
- * demo_v7 default implementation is Mock-only. H13/HC-13 vision input can be
- * enabled at compile time with TASK_VISION_USE_H13 once a UART is available.
+ * demo_v7 accepts HC-13 vision input by default. Mock injection remains
+ * available for local control tests.
  */
 
 #ifndef TASK_VISION_H
@@ -14,8 +14,8 @@
 #include "ara_def.h"
 #include "datahub.h"
 
-#ifndef TASK_VISION_USE_H13
-#define TASK_VISION_USE_H13 (1)
+#ifndef TASK_VISION_USE_HC13
+#define TASK_VISION_USE_HC13 (1)
 #endif
 
 /**

@@ -103,7 +103,7 @@ typedef struct {
 typedef struct {
     bool     target_present;          /**< True when a fresh target is visible. */
     int16_t  target_angle_deg;        /**< Commanded joint angle in degrees. */
-    uint16_t target_speed;            /**< Desired traversal speed, step/s. */
+    uint16_t target_speed;            /**< Desired traversal speed, deg/s; 0 = safe AUTO default. */
     uint8_t  confidence;              /**< 0..100; zero disables AUTO action. */
     uint32_t last_update_tick_ms;     /**< When the latest vision event arrived. */
 } VisionIntent_t;

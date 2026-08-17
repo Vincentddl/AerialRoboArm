@@ -42,7 +42,15 @@ typedef enum {
 /* PI represented in Q15 */
 #define Q15_PI          (102944)
 
-/* --- 3. Common Callback Type --- */
+/* --- 3. Main-arm mechanical software limits ---
+ * HX8 sign convention: negative = forward, positive = backward.
+ * These limits apply to RC manual, RTT force commands and HC-13 vision AUTO.
+ * The HX8 protocol itself supports a wider range; this narrower envelope
+ * protects the actual AerialRoboArm mechanism. */
+#define ARA_MAIN_ARM_ANGLE_MIN_DEG   (-100)
+#define ARA_MAIN_ARM_ANGLE_MAX_DEG   (100)
+
+/* --- 4. Common Callback Type --- */
 typedef void (*AraCallback_t)(void);
 
 #endif // ARA_DEF_H

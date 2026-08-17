@@ -144,6 +144,7 @@ void TaskArbiter_Decide(const ArbiterInput_t *in, ArbiterOutput_t *out)
     /* ----- Rule 7: AUTO mode ----- */
     if (rc->req_mode == ARA_MODE_AUTO) {
         const bool vision_fresh = vs->target_present &&
+            (vs->confidence >= ARBITER_MIN_VISION_CONFIDENCE) &&
             ((uint32_t)(in->tick_ms - vs->last_update_tick_ms) < vision_stale_ms);
 
         if (vision_fresh) {

@@ -1,4 +1,4 @@
-# STM32F103C8T6 Pin Map
+﻿# STM32F103C8T6 Pin Map
 
 本文档记录当前 AerialRoboArm 控制板 PCB 与当前固件之间的 STM32F103C8T6 引脚占用关系。
 
@@ -13,15 +13,17 @@
 ```text
 MX_GPIO_Init()
 MX_DMA_Init()
+MX_I2C1_Init()
 MX_TIM2_Init()
 MX_USART1_UART_Init()
 MX_USART2_UART_Init()
+MX_USART3_UART_Init()
 MX_IWDG_Init()
 BSP_UART_Init()
 BSP_PWM_Init()
 ```
 
-`MX_USART3_UART_Init()` 当前已注释，调试输出改为 DAPLink + OpenOCD RTT server，不再占用 USART3。
+调试输出改为 DAPLink + OpenOCD RTT server，不再占用 USART3；USART3 当前用于 HC13 透明无线串口。
 
 ## 当前使用的硬件
 
@@ -38,8 +40,8 @@ BSP_PWM_Init()
 | 状态指示 IO | PC13 GPIO | 当前启用 | 状态 LED / 板载状态输出。 |
 | HSE 外部晶振 | PD0/PD1 | 当前启用 | 系统时钟源。 |
 | IWDG | 内部外设 | 当前启用 | 独立看门狗，不占用 GPIO。 |
-| HC13 无线串口 | USART3: PB10/PB11 + PB0 KEY | PCB 已布线，固件未启用 | 预留给后续 H13/HC13 视觉链路。 |
-| I2C1 外设接口 | PB8/PB9 | PCB 已布线，固件未启用 | PCB 已接出 `I2C1_SCL/SDA`，当前固件未初始化 I2C1。 |
+| HC13 无线串口 | USART3: PB10/PB11 + PB0 KEY | 当前启用 | HC13 视觉/远程控制链路，`230400 8N1`，PB0 KEY 当前预留。 |
+| VL53L1X 距离传感器 | I2C1: PB8/PB9 | 当前启用 | `PB8=SCL`、`PB9=SDA`，默认 7-bit 地址 `0x29`。 |
 
 ## 当前运行时引脚占用
 
@@ -55,6 +57,10 @@ BSP_PWM_Init()
 | PA3 | `HX8_RX` | USART2_RX | Input | HX8/FSUS 串口接收。 |
 | PB6 | `ELRS_TX` | USART1_TX remap | Output | USART1 remap TX，连接 ELRS 侧 RX。 |
 | PB7 | `ELRS_RX` | USART1_RX remap | Input | USART1 remap RX，接收 ELRS 数据。 |
+| PB10 | `HC13_TX` | USART3_TX | Output | 连接 MCU 端 HC13 `RXD`，当前配置 `230400 8N1`。 |
+| PB11 | `HC13_RX` | USART3_RX | Input | 连接 MCU 端 HC13 `TXD`，当前配置 `230400 8N1`。 |
+| PB8 | `I2C1_SCL` | I2C1_SCL | Output | VL53L1X I2C 时钟，复用开漏输出，PCB 4.7 kOhm 上拉保留。 |
+| PB9 | `I2C1_SDA` | I2C1_SDA | Bidirectional | VL53L1X I2C 数据，复用开漏，PCB 4.7 kOhm 上拉保留。 |
 | PA13 | `PA13/SWDIO` | SYS_JTMS-SWDIO | Bidirectional | SWD 数据线；DAPLink/OpenOCD/RTT 使用。 |
 | PA14 | `PA14/SWCLK` | SYS_JTCK-SWCLK | Input | SWD 时钟线；DAPLink/OpenOCD/RTT 使用。 |
 
@@ -64,10 +70,6 @@ BSP_PWM_Init()
 | --- | --- | --- | --- | --- |
 | PB0 | `HC13_KEY` | HC13 KEY | 未初始化 | 可用于 HC13 配置/模式控制。 |
 | PB1 | `BOOT1` | Boot 配置 | 未作为 GPIO 使用 | BOOT1 硬件配置脚。 |
-| PB8 | `I2C1_SCL` | I2C1_SCL | 未初始化 | PCB 已接出，当前固件未调用 `MX_I2C1_Init()`。 |
-| PB9 | `I2C1_SDA` | I2C1_SDA | 未初始化 | PCB 已接出，当前固件未调用 `MX_I2C1_Init()`。 |
-| PB10 | `HC13_TX` | USART3_TX | 未初始化 | `usart.c` 中仍有 USART3 生成代码，但 `main.c` 当前不调用 `MX_USART3_UART_Init()`。 |
-| PB11 | `HC13_RX` | USART3_RX | 未初始化 | 预留给 HC13/H13 串口接收。 |
 | BOOT0 | `BOOT0` | Boot 配置 | 硬件配置 | 启动模式选择脚。 |
 
 ## 当前不应再视为占用的历史资源
@@ -76,8 +78,8 @@ BSP_PWM_Init()
 | --- | --- | --- |
 | PA8/PA9/PA10 / TIM1_CH1~CH3 | 旧 BLDC 三相 PWM | 当前 `main.c` 不初始化 TIM1，PCB 图中 PA8/PA9/PA10 未接外部功能。 |
 | PA11 / `MOTOR_EN` | 旧 SimpleFOC Mini / BLDC 功率级 EN | PCB 未连接该使能脚；当前应停止视为有效硬件资源。 |
-| PB8/PB9 / AS5600 I2C | 旧 AS5600 位置反馈 | PCB 保留 I2C1，但当前固件未启用 AS5600/I2C1 路径。 |
-| PB10/PB11 / Debug UART | 旧 USART3 调试串口 | 调试已迁移到 RTT；PB10/PB11 预留给 HC13。 |
+| PB8/PB9 / AS5600 I2C | 旧 AS5600 位置反馈 | AS5600 路径未启用；PB8/PB9 当前作为 VL53L1X 的 I2C1 总线。 |
+| PB10/PB11 / Debug UART | 旧 USART3 调试串口 | 调试已迁移到 RTT；PB10/PB11 当前用于 HC13。 |
 
 ## USART 与 DMA 资源
 
@@ -85,7 +87,7 @@ BSP_PWM_Init()
 | --- | --- | --- | --- |
 | USART1 | PB6 TX, PB7 RX | ELRS-2.4G-NANO 接收机，`420000` baud | RX: DMA1_Channel5 circular；TX: DMA1_Channel4 normal；USART1 IRQ enabled。 |
 | USART2 | PA2 TX, PA3 RX | 通过 UC-01 连接 HX8/FSUS 串口执行器，`115200` baud | 当前 BSP 使用 blocking TX + interrupt RX；CubeMX 仍配置 DMA1_Channel7 TX / DMA1_Channel6 RX；USART2 IRQ enabled。 |
-| USART3 | PB10 TX, PB11 RX | 当前未启用，预留 HC13 | `main.c` 不调用 `MX_USART3_UART_Init()`；`.ioc/usart.c` 中仍有残留配置。 |
+| USART3 | PB10 TX, PB11 RX | HC13 透明无线串口，`230400` baud | RX: single-byte interrupt into `DrvHC13_PushRxByte()`；USART3 IRQ enabled。 |
 
 ## RadioMaster Pocket + ELRS-2.4G-NANO 接收机参数
 
@@ -298,6 +300,6 @@ OpenOCD RTT server 配置文件为仓库根目录的 `daplink_rtt.cfg`。
 ## 注意事项
 
 - PCB 没有为 PA11 预留电机使能连接，后续固件应移除或停止初始化 PA11 的 `MOTOR_EN` 历史配置。
-- 如果后续启用 HC13/H13，应使用 PB10/PB11 的 USART3，并同步清理 CubeMX 中旧的 debug UART 语义。
-- 如果后续启用 I2C1，应以 PCB 网络名 `I2C1_SCL=PB8`、`I2C1_SDA=PB9` 为准。
+- HC13 当前使用 PB10/PB11 的 USART3；调试日志继续走 RTT，避免重新占用 USART3。
+- PB8/PB9 当前固定初始化为 I2C1，供 VL53L1X 距离传感器使用。
 - `HAL_MspInit()` 当前关闭 JTAG、保留 SWD，因此 PA13/PA14 必须保留给调试；PA15/PB3/PB4 理论上释放，但当前 PCB 未使用。

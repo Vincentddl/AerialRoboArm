@@ -158,8 +158,8 @@ static uint8_t update_ch4_gripper_momentary(ModRcSemantic_Context_t *p_ctx,
 
 static int16_t clamp_ch1_target_deg(int32_t deg)
 {
-    if (deg > 180) return 180;
-    if (deg < -180) return -180;
+    if (deg > ARA_MAIN_ARM_ANGLE_MAX_DEG) return ARA_MAIN_ARM_ANGLE_MAX_DEG;
+    if (deg < ARA_MAIN_ARM_ANGLE_MIN_DEG) return ARA_MAIN_ARM_ANGLE_MIN_DEG;
     return (int16_t)deg;
 }
 
@@ -203,8 +203,8 @@ static void update_ch1_rate_target(ModRcSemantic_Context_t *p_ctx,
 
     p_ctx->inc_target_q8 += delta_q8;
 
-    const int32_t min_q8 = -180L * 256L;
-    const int32_t max_q8 =  180L * 256L;
+    const int32_t min_q8 = (int32_t)ARA_MAIN_ARM_ANGLE_MIN_DEG * 256L;
+    const int32_t max_q8 = (int32_t)ARA_MAIN_ARM_ANGLE_MAX_DEG * 256L;
     if (p_ctx->inc_target_q8 < min_q8) p_ctx->inc_target_q8 = min_q8;
     if (p_ctx->inc_target_q8 > max_q8) p_ctx->inc_target_q8 = max_q8;
 
