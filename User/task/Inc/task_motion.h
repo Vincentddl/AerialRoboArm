@@ -40,7 +40,7 @@
 #define TASK_MOTION_ANGLE_MIN_DEG       ARA_MAIN_ARM_ANGLE_MIN_DEG /**< Forward mechanical limit. */
 #define TASK_MOTION_ANGLE_MAX_DEG       ARA_MAIN_ARM_ANGLE_MAX_DEG /**< Backward mechanical limit. */
 
-#define TASK_MOTION_DEFAULT_VELOCITY    (500.0f)/**< deg/s, faster manual response while keeping a smooth target ramp. */
+#define TASK_MOTION_DEFAULT_VELOCITY    (696.0f)/**< deg/s, HX8-U26H-M rated speed at 12 V (116 rpm). */
 #define TASK_MOTION_DEFAULT_T_ACC_MS    (20U)   /**< Protocol minimum ramp for fastest manual response; test with care. */
 #define TASK_MOTION_DEFAULT_T_DEC_MS    (20U)   /**< Protocol minimum ramp for fastest manual response; test with care. */
 #define TASK_MOTION_DEFAULT_POWER_MW    (0U)    /**< 0 = servo auto-calc. */

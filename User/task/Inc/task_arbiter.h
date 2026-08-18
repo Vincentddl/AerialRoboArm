@@ -104,6 +104,13 @@ typedef struct {
 #define ARBITER_MIN_VISION_CONFIDENCE     (60U)
 
 /**
+ * PTK absolute command used to open the gripper in supervised AUTO mode.
+ * The mechanism's closed/default command is 90 deg; its measured open
+ * command is 130 deg.  This is an absolute servo target, not an opening span.
+ */
+#define ARBITER_AUTO_GRIPPER_ANGLE_DEG    (130U)
+
+/**
  * @brief Sentinel meaning "this output's target_angle_deg is intentionally
  *        unset; the consumer must keep its previous target". Currently
  *        emitted on the AUTO/vision-stale path where the arbiter cannot

@@ -62,7 +62,7 @@ static void console_print_help(void)
         "[DBG] keys:\r\n"
         "  v=mock-vision 120deg/3s   c=clear-vision    f=clear-fault\r\n"
         "  e=force ON (lock 0deg)    k=force OFF\r\n"
-        "  1=goto 0  2=goto 90  3=goto +100 limit\r\n"
+        "  1=goto 0  2=goto -70  3=goto +70\r\n"
         "  +=+10deg  -=-10deg\r\n"
         "  g <deg>=force HX8 to arbitrary angle, eg 'g 47<enter>'\r\n"
         "  p <ch> <deg>=lock PTK (ch 0=grip,1=roll; deg 0..180; -1=release)\r\n"
@@ -258,10 +258,10 @@ static void console_poll(uint32_t tick_ms)
             console_send_force(0, true);
             break;
         case '2':
-            console_send_force(90, true);
+            console_send_force(-70, true);
             break;
         case '3':
-            console_send_force(TASK_MOTION_ANGLE_MAX_DEG, true);
+            console_send_force(70, true);
             break;
         case '+': {
             int32_t a = (int32_t)s_console_force_angle + 10;

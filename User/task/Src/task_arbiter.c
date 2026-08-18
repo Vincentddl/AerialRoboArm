@@ -155,7 +155,7 @@ void TaskArbiter_Decide(const ArbiterInput_t *in, ArbiterOutput_t *out)
             out->target_acc       = 50U;
             out->gripper_cmd      = GRIPPER_CMD_STOP;
             out->roll_degree      = 90U;
-            out->gripper_angle    = 90U;
+            out->gripper_angle    = ARBITER_AUTO_GRIPPER_ANGLE_DEG;
             out->led_pattern      = LED_PATTERN_AUTO_SOLID;
             out->reason_code      = ARB_REASON_AUTO_VISION_FRESH;
             return;
@@ -168,6 +168,8 @@ void TaskArbiter_Decide(const ArbiterInput_t *in, ArbiterOutput_t *out)
         out->target_speed     = 0U;
         out->target_acc       = 50U;
         out->gripper_cmd      = GRIPPER_CMD_STOP;
+        out->roll_degree      = 90U;
+        out->gripper_angle    = ARBITER_AUTO_GRIPPER_ANGLE_DEG;
         out->led_pattern      = LED_PATTERN_AUTO_SOLID;
         out->reason_code      = ARB_REASON_AUTO_VISION_STALE;
         return;
