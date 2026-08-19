@@ -40,9 +40,9 @@
 #define TASK_MOTION_ANGLE_MIN_DEG       ARA_MAIN_ARM_ANGLE_MIN_DEG /**< Forward mechanical limit. */
 #define TASK_MOTION_ANGLE_MAX_DEG       ARA_MAIN_ARM_ANGLE_MAX_DEG /**< Backward mechanical limit. */
 
-#define TASK_MOTION_DEFAULT_VELOCITY    (696.0f)/**< deg/s, HX8-U26H-M rated speed at 12 V (116 rpm). */
-#define TASK_MOTION_DEFAULT_T_ACC_MS    (20U)   /**< Protocol minimum ramp for fastest manual response; test with care. */
-#define TASK_MOTION_DEFAULT_T_DEC_MS    (20U)   /**< Protocol minimum ramp for fastest manual response; test with care. */
+#define TASK_MOTION_DEFAULT_VELOCITY    (750.0f)/**< deg/s, at FSUS protocol max (125 rpm @ 12 V). */
+#define TASK_MOTION_DEFAULT_T_ACC_MS    (50U)   /**< Accel ramp; 50 ms mid-point between 20/80. */
+#define TASK_MOTION_DEFAULT_T_DEC_MS    (50U)   /**< Decel ramp; 50 ms mid-point between 20/80. */
 #define TASK_MOTION_DEFAULT_POWER_MW    (0U)    /**< 0 = servo auto-calc. */
 #define TASK_MOTION_AUTO_VELOCITY       (80.0f) /**< Conservative first-stage vision AUTO speed. */
 #define TASK_MOTION_AUTO_VELOCITY_MIN   (20.0f) /**< Lowest accepted non-zero HC13 AUTO speed. */
