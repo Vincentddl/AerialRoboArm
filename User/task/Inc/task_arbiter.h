@@ -15,11 +15,12 @@
  * Priority ladder (high to low):
  *   1. Operator E-Stop via SD (latched)
  *   2. RC link loss (latched)
- *   3. Servo offline (not latched; bring-up owns recovery)
- *   4. Latched fault reset via SB, only after SD is released
- *   5. MANUAL mode (RC intent)
- *   6. AUTO mode with fresh/stale vision
- *   7. IDLE default
+ *   3. HX8 hardware stall BIT2 (latched)
+ *   4. Servo offline (not latched; bring-up owns recovery)
+ *   5. Latched fault reset via SB, only after the cause clears
+ *   6. MANUAL mode (RC intent)
+ *   7. AUTO mode with fresh/stale vision
+ *   8. IDLE default
  */
 
 #ifndef TASK_ARBITER_H
@@ -42,7 +43,8 @@ typedef enum {
     ARB_REASON_IDLE_DEFAULT        = 6,
     ARB_REASON_SERVO_OFFLINE       = 7,
     ARB_REASON_FAULT_PENDING_RESET = 8,
-    ARB_REASON_HOME_ZERO           = 9
+    ARB_REASON_HOME_ZERO           = 9,
+    ARB_REASON_SERVO_STALL         = 10
 } ArbiterReason_t;
 
 /* ============================================================================
@@ -54,6 +56,8 @@ typedef struct {
     const VisionIntent_t   *vision;
     /** Opaque handle-style, read: is the servo currently reachable. */
     bool                    servo_online;
+    /** Fresh HX8 BIT2 stall indication. Latches the general fault path. */
+    bool                    servo_stall_active;
     uint32_t                tick_ms;
     AraSysMode_t            prev_mode;
     /** Vision freshness window in ms. Past this, AUTO falls back to park. */

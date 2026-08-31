@@ -109,7 +109,10 @@ int main(void)
   MX_IWDG_Init();
   /* USER CODE BEGIN 2 */
     BSP_UART_Init(); // 确保串口先初始化，方便打印 Log
+#if !defined(TOFSENSE_SAFE_TEST)
+    /* Sensor-only validation must not start either PTK PWM output. */
     BSP_PWM_Init();
+#endif
 
     /* PB8/PB9 provide the I2C1 sensor bus. */
 

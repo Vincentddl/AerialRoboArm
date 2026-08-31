@@ -26,7 +26,9 @@
  *        velocity command; target is integrated every control update.
  */
 #define MOD_RC_CH1_DEADBAND_PCT       (15)
-#define MOD_RC_CH1_RATE_MAX_DEG_PER_S (500)
+/* Keep the target generator below the 300 deg/s actuator command so the
+ * servo does not build up a hidden following error after the stick returns. */
+#define MOD_RC_CH1_RATE_MAX_DEG_PER_S (240)
 
 /**
  * @brief CH1 threshold for entering EXTEND state.

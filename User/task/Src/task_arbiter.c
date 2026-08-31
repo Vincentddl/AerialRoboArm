@@ -72,7 +72,18 @@ void TaskArbiter_Decide(const ArbiterInput_t *in, ArbiterOutput_t *out)
         return;
     }
 
-    /* ----- Rule 3: servo offline (does NOT latch) ----- */
+    /* ----- Rule 3: HX8 hardware stall protection (latches) ----- */
+    if (in->servo_stall_active) {
+        out->mode               = ARA_MODE_ERROR;
+        out->estop              = true;
+        out->torque_request     = false;
+        out->led_pattern        = LED_PATTERN_ERROR_SOS;
+        out->reason_code        = ARB_REASON_SERVO_STALL;
+        out->fault_latched_next = true;
+        return;
+    }
+
+    /* ----- Rule 4: servo offline (does NOT latch) ----- */
     if (!in->servo_online) {
         out->mode           = ARA_MODE_ERROR;
         out->estop          = true;
@@ -84,7 +95,7 @@ void TaskArbiter_Decide(const ArbiterInput_t *in, ArbiterOutput_t *out)
         return;
     }
 
-    /* ----- Rule 4: latched but underlying fault cleared ----- */
+    /* ----- Rule 5: latched but underlying fault cleared ----- */
     if (in->fault_latched) {
         if (rc->sys_reset_pulse && (rc->estop_state == ESTOP_RELEASED)) {
             /* Consume the pulse: leave latched ERROR, forced IDLE this tick.
@@ -111,7 +122,7 @@ void TaskArbiter_Decide(const ArbiterInput_t *in, ArbiterOutput_t *out)
         return;
     }
 
-    /* ----- Rule 5: Momentary home-to-zero command (SE) ----- */
+    /* ----- Rule 6: Momentary home-to-zero command (SE) ----- */
     if (rc->home_to_zero_pulse) {
         out->mode             = ARA_MODE_MANUAL;
         out->torque_request   = true;
@@ -126,7 +137,7 @@ void TaskArbiter_Decide(const ArbiterInput_t *in, ArbiterOutput_t *out)
         return;
     }
 
-    /* ----- Rule 6: MANUAL mode (RC up, operator present) ----- */
+    /* ----- Rule 7: MANUAL mode (RC up, operator present) ----- */
     if (rc->req_mode == ARA_MODE_MANUAL) {
         out->mode             = ARA_MODE_MANUAL;
         out->torque_request   = true;
@@ -141,7 +152,7 @@ void TaskArbiter_Decide(const ArbiterInput_t *in, ArbiterOutput_t *out)
         return;
     }
 
-    /* ----- Rule 7: AUTO mode ----- */
+    /* ----- Rule 8: AUTO mode ----- */
     if (rc->req_mode == ARA_MODE_AUTO) {
         const bool vision_fresh = vs->target_present &&
             (vs->confidence >= ARBITER_MIN_VISION_CONFIDENCE) &&
@@ -175,7 +186,7 @@ void TaskArbiter_Decide(const ArbiterInput_t *in, ArbiterOutput_t *out)
         return;
     }
 
-    /* ----- Rule 8: default IDLE ----- */
+    /* ----- Rule 9: default IDLE ----- */
     out->mode           = ARA_MODE_IDLE;
     out->torque_request = false;
     out->led_pattern    = LED_PATTERN_IDLE_SLOW_BLINK;

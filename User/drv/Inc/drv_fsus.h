@@ -54,7 +54,10 @@
 #define FSUS_T_ACC_DEC_MIN_MS           (20U)
 
 /* --- Timeouts (ms) --- */
-#define FSUS_IO_TIMEOUT_MS              (100U)
+/* A 21-byte monitor response takes under 2 ms at 115200 baud. Keeping this
+ * bounded to one 50 Hz control period prevents a silent bus from stalling RC
+ * processing in repeated 100 ms chunks. */
+#define FSUS_IO_TIMEOUT_MS              (20U)
 
 /* =============================================================================
  * 2. Feedback Structure
@@ -83,7 +86,8 @@ typedef enum {
     FSUS_PARSE_BAD_SIZE,         /**< Size field inconsistent or too large. */
     FSUS_PARSE_BAD_CHECKSUM,     /**< Checksum mismatch. */
     FSUS_PARSE_TIMEOUT,          /**< Upper layer reported RX timeout. */
-    FSUS_PARSE_BAD_FRAME         /**< Generic frame error. */
+    FSUS_PARSE_BAD_FRAME,        /**< Generic frame error. */
+    FSUS_PARSE_TX_FAILED         /**< STM32 HAL could not transmit the request. */
 } FsusParseResult_t;
 
 /* =============================================================================

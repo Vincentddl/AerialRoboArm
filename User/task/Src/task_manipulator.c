@@ -44,6 +44,17 @@ void TaskManipulator_Init(void)
     s_ctx.last_target_angle_deg = 0.0f;
 }
 
+void TaskManipulator_SeedCurrentAngle(float current_angle_deg)
+{
+    if (current_angle_deg > (float)TASK_MOTION_ANGLE_MAX_DEG) {
+        current_angle_deg = (float)TASK_MOTION_ANGLE_MAX_DEG;
+    }
+    if (current_angle_deg < (float)TASK_MOTION_ANGLE_MIN_DEG) {
+        current_angle_deg = (float)TASK_MOTION_ANGLE_MIN_DEG;
+    }
+    s_ctx.last_target_angle_deg = current_angle_deg;
+}
+
 ManipulatorState_t TaskManipulator_GetState(void)
 {
     return s_ctx.current_state;
@@ -84,6 +95,9 @@ void TaskManipulator_Update(const ArbiterOutput_t *arb,
     /* Boot waits for servo online. Arbiter rejects offline -> ERROR_SAFE. So
      * when we land here with non-error mode, servo is online. */
     if (s_ctx.current_state == MANIP_STATE_BOOT) {
+        if (mot_state->feedback_valid) {
+            TaskManipulator_SeedCurrentAngle(mot_state->feedback.angle_deg);
+        }
         enter_state(MANIP_STATE_IDLE, tick_ms);
     }
 

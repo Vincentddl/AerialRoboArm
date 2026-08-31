@@ -145,10 +145,15 @@ typedef struct {
     AraStatus_t       servo_status;          /**< ARA_OK / ARA_BUSY / ARA_ERR_DISCONNECTED. */
     uint8_t           servo_last_write_result; /**< FsusParseResult_t as a compact debug code. */
     uint8_t           servo_last_read_result;  /**< FsusParseResult_t as a compact debug code. */
+    uint32_t          servo_feedback_age_ms;   /**< Age of latest real HX8 monitor frame. */
+    uint32_t          servo_encoder_jump_count;/**< Suspected impossible encoder discontinuities. */
+    bool              servo_stalled;           /**< HX8 monitor BIT2 stall state. */
 
     /* --- Link health --- */
     bool              rc_link_up;
     bool              vision_link_up;
+    int16_t           rc_ch1_percent;          /**< Raw semantic CH1, -100..+100. */
+    bool              servo_reconnect_guard;  /**< Waiting for centered CH1 after HX8 recovery. */
     uint32_t          rc_last_ok_ms;
     uint32_t          vision_last_ok_ms;
 

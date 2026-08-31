@@ -36,6 +36,7 @@
 #include "app_debug.h"
 #include "app_housekeeping.h"
 #include "app_tof.h"
+#include "iwdg.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -115,8 +116,10 @@ void MX_FREERTOS_Init(void) {
   /* USER CODE BEGIN RTOS_THREADS */
   /* demo_v7: create application threads. defaultTask above continues to run
    * App_Housekeeping_Step at 1Hz; ControlTask and DebugTask are created here. */
+#if !defined(TOFSENSE_SAFE_TEST)
   App_Control_Init();
   App_Tof_Init();
+#endif
   App_Debug_Init();
   /* USER CODE END RTOS_THREADS */
 
@@ -140,12 +143,21 @@ void StartDefaultTask(void *argument)
 
     /* demo_v7: defaultTask runs the housekeeping janitor at 1Hz.
      * It feeds IWDG only when ControlTask heartbeat is fresh. */
+#if defined(TOFSENSE_SAFE_TEST)
+    /* The sensor-only build intentionally has no ControlTask heartbeat.
+     * Feed IWDG directly while leaving every actuator task disabled. */
+    for (;;) {
+        (void)HAL_IWDG_Refresh(&hiwdg);
+        osDelay(100);
+    }
+#else
     App_Housekeeping_Init();
 
     for (;;) {
         App_Housekeeping_Step();
         osDelay(1000);
     }
+#endif
   /* USER CODE END StartDefaultTask */
 }
 

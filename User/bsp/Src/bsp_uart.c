@@ -21,6 +21,9 @@
 #define UART_FSUS_RX_BUF_SIZE    (256U)
 #define UART_HC13_RAW_BUF_SIZE    (256U)
 #define UART_TX_TIMEOUT_MS       (100U)
+#define UART_FSUS_TX_TIMEOUT_MS  (20U)
+/* Fashion Star protocol recommends 5-10 ms between adjacent commands. */
+#define UART_FSUS_MIN_FRAME_GAP_MS (5U)
 
 /* Half-duplex notification bits (legacy ST3215 HD state machine, archived driver). */
 #define HD_NOTIFY_RX_DONE        (1U << 0)
@@ -55,17 +58,24 @@ static uint8_t  s_fsus_rx_buf[UART_FSUS_RX_BUF_SIZE];
 static volatile uint16_t s_fsus_rx_head = 0U;  /* ISR writes */
 static uint16_t s_fsus_rx_tail = 0U;           /* task reads */
 static uint8_t  s_fsus_rx_byte;                /* 1-byte IT target */
+static volatile bool s_fsus_rx_armed = false;
 static uint8_t  s_hc13_raw_buf[UART_HC13_RAW_BUF_SIZE];
 static volatile uint16_t s_hc13_raw_head = 0U;  /* ISR writes */
 static uint16_t s_hc13_raw_tail = 0U;           /* task reads */
 static uint8_t  s_hc13_rx_byte;                 /* 1-byte IT target */
 /* Long periodic snapshots include HC13/vision counters and exceed 128 bytes.
  * Keep enough room for one complete line so diagnostics do not truncate. */
-static char tx_buf[256];                // 发送缓冲区 (由信号量保护)
+static char s_debug_tx_buf[256];        /* DebugTask-only RTT formatting buffer. */
 
 /* Bring-up diagnostics: TX/RX byte counters visible to upper layers. */
 static volatile uint32_t s_fsus_tx_bytes = 0U;
 static volatile uint32_t s_fsus_rx_bytes = 0U;
+static volatile uint32_t s_fsus_tx_errors = 0U;
+static volatile uint32_t s_fsus_rx_errors = 0U;
+static volatile uint32_t s_fsus_rx_rearm_failures = 0U;
+static volatile uint32_t s_fsus_rx_overflows = 0U;
+static volatile uint32_t s_fsus_last_hal_error = HAL_UART_ERROR_NONE;
+static uint32_t s_fsus_last_tx_complete_ms = 0U;
 static volatile uint32_t s_elrs_rx_bytes = 0U;
 static volatile uint32_t s_hc13_rx_bytes = 0U;
 static volatile uint32_t s_uart_rx_dma_recoveries = 0U;
@@ -231,7 +241,12 @@ void BSP_UART_Init(void)
 
     /* 3. Start interrupt-based RX on USART2 (FSUS).
      *     One byte per interrupt, pushed to s_fsus_rx_buf in the ISR. */
-    HAL_UART_Receive_IT(&huart2, &s_fsus_rx_byte, 1);
+    if (HAL_UART_Receive_IT(&huart2, &s_fsus_rx_byte, 1) == HAL_OK) {
+        s_fsus_rx_armed = true;
+    } else {
+        s_fsus_rx_armed = false;
+        s_fsus_rx_rearm_failures++;
+    }
 
     /* 4. Start interrupt-based RX on USART3 (HC13).
      *     One byte per interrupt, pushed directly into the HC13 parser FIFO. */
@@ -248,19 +263,19 @@ void BSP_UART_Printf(const char *format, ...)
     int len;
 
     va_start(args, format);
-    len = vsnprintf(tx_buf, sizeof(tx_buf), format, args);
+    len = vsnprintf(s_debug_tx_buf, sizeof(s_debug_tx_buf), format, args);
     va_end(args);
 
     if (len > 0) {
         /* vsnprintf returns the length that would have been written. Clamp it
          * to the bytes actually present; otherwise a truncated message causes
-         * SEGGER_RTT_Write to read beyond tx_buf and print adjacent memory. */
-        unsigned write_len = ((unsigned)len < sizeof(tx_buf))
+         * SEGGER_RTT_Write to read beyond the buffer and print adjacent memory. */
+        unsigned write_len = ((unsigned)len < sizeof(s_debug_tx_buf))
                                  ? (unsigned)len
-                                 : (unsigned)(sizeof(tx_buf) - 1U);
+                                 : (unsigned)(sizeof(s_debug_tx_buf) - 1U);
         /* RTT channel 0: terminal output. NO_BLOCK_SKIP mode drops data
          * silently when PC-side RTT Viewer is not connected. */
-        (void)SEGGER_RTT_Write(0, tx_buf, write_len);
+        (void)SEGGER_RTT_Write(0, s_debug_tx_buf, write_len);
     }
 }
 
@@ -447,13 +462,20 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 {
     /* FSUS (USART2): push each received byte into the FSUS ring buffer. */
     if (huart == uart_ctx[BSP_UART_ST3215].huart) {
+        s_fsus_rx_armed = false;
         uint16_t next = (s_fsus_rx_head + 1U) % UART_FSUS_RX_BUF_SIZE;
         if (next != s_fsus_rx_tail) {
             s_fsus_rx_buf[s_fsus_rx_head] = s_fsus_rx_byte;
             s_fsus_rx_head = next;
             s_fsus_rx_bytes++;
+        } else {
+            s_fsus_rx_overflows++;
         }
-        HAL_UART_Receive_IT(huart, &s_fsus_rx_byte, 1);
+        if (HAL_UART_Receive_IT(huart, &s_fsus_rx_byte, 1) == HAL_OK) {
+            s_fsus_rx_armed = true;
+        } else {
+            s_fsus_rx_rearm_failures++;
+        }
         return;
     }
 
@@ -505,7 +527,15 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 {
     /* FSUS (USART2): re-arm interrupt RX after an error. */
     if (huart == uart_ctx[BSP_UART_ST3215].huart) {
-        HAL_UART_Receive_IT(huart, &s_fsus_rx_byte, 1);
+        s_fsus_rx_armed = false;
+        s_fsus_last_hal_error = HAL_UART_GetError(huart);
+        s_fsus_rx_errors++;
+        (void)HAL_UART_AbortReceive(huart);
+        if (HAL_UART_Receive_IT(huart, &s_fsus_rx_byte, 1) == HAL_OK) {
+            s_fsus_rx_armed = true;
+        } else {
+            s_fsus_rx_rearm_failures++;
+        }
         return;
     }
 
@@ -528,14 +558,50 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
  * FSUS transaction API (USART2, full-duplex, interrupt RX + blocking TX)
  * ============================================================================= */
 
-void BSP_UART_Fsus_Send(const uint8_t *data, uint16_t len)
+AraStatus_t BSP_UART_Fsus_EnsureRxArmed(void)
+{
+    if (s_fsus_rx_armed && (huart2.RxState == HAL_UART_STATE_BUSY_RX)) {
+        return ARA_OK;
+    }
+
+    /* Recover stale READY/ERROR states in task context. The ISR callback may
+     * observe HAL_BUSY while unwinding; without this retry RX would remain
+     * disabled indefinitely and every later monitor request would time out. */
+    (void)HAL_UART_AbortReceive(&huart2);
+    if (HAL_UART_Receive_IT(&huart2, &s_fsus_rx_byte, 1U) == HAL_OK) {
+        s_fsus_rx_armed = true;
+        return ARA_OK;
+    }
+
+    s_fsus_rx_armed = false;
+    s_fsus_rx_rearm_failures++;
+    return ARA_ERR_IO;
+}
+
+AraStatus_t BSP_UART_Fsus_Send(const uint8_t *data, uint16_t len)
 {
     if ((data == NULL) || (len == 0U)) {
-        return;
+        return ARA_ERR_PARAM;
     }
-    if (HAL_UART_Transmit(&huart2, (uint8_t *)data, len, 100) == HAL_OK) {
+    if (s_fsus_last_tx_complete_ms != 0U) {
+        const uint32_t now_ms = HAL_GetTick();
+        const uint32_t elapsed_ms = now_ms - s_fsus_last_tx_complete_ms;
+        if (elapsed_ms < UART_FSUS_MIN_FRAME_GAP_MS) {
+            vTaskDelay(pdMS_TO_TICKS(UART_FSUS_MIN_FRAME_GAP_MS - elapsed_ms));
+        }
+    }
+
+    const HAL_StatusTypeDef result = HAL_UART_Transmit(&huart2,
+                                                        (uint8_t *)data,
+                                                        len,
+                                                        UART_FSUS_TX_TIMEOUT_MS);
+    s_fsus_last_tx_complete_ms = HAL_GetTick();
+    if (result == HAL_OK) {
         s_fsus_tx_bytes += len;
+        return ARA_OK;
     }
+    s_fsus_tx_errors++;
+    return ARA_ERR_IO;
 }
 
 uint16_t BSP_UART_Fsus_Recv(uint8_t *data, uint16_t len)
@@ -558,6 +624,11 @@ void BSP_UART_Fsus_Flush(void)
 
 uint32_t BSP_UART_Fsus_GetTxBytes(void) { return s_fsus_tx_bytes; }
 uint32_t BSP_UART_Fsus_GetRxBytes(void) { return s_fsus_rx_bytes; }
+uint32_t BSP_UART_Fsus_GetTxErrors(void) { return s_fsus_tx_errors; }
+uint32_t BSP_UART_Fsus_GetRxErrors(void) { return s_fsus_rx_errors; }
+uint32_t BSP_UART_Fsus_GetRxRearmFailures(void) { return s_fsus_rx_rearm_failures; }
+uint32_t BSP_UART_Fsus_GetRxOverflows(void) { return s_fsus_rx_overflows; }
+uint32_t BSP_UART_Fsus_GetLastHalError(void) { return s_fsus_last_hal_error; }
 uint32_t BSP_UART_HC13_GetRxBytes(void) { return s_hc13_rx_bytes; }
 
 uint16_t BSP_UART_HC13_ReadRaw(uint8_t *data, uint16_t len)

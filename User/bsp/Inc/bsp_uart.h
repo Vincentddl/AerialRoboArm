@@ -57,8 +57,16 @@ void BSP_UART_SetRxCpltCallback(BspUart_Dev_t dev, AraCallback_t cb);
  * @brief Send bytes on USART2 via blocking HAL_UART_Transmit.
  * @param data  Data to send.
  * @param len   Byte count.
+ * @return ARA_OK only when HAL accepted and completed the whole frame.
  */
-void BSP_UART_Fsus_Send(const uint8_t *data, uint16_t len);
+AraStatus_t BSP_UART_Fsus_Send(const uint8_t *data, uint16_t len);
+
+/**
+ * @brief Ensure USART2 single-byte interrupt reception is armed.
+ * @note  Called from task context before every request/response transaction;
+ *        repairs a failed ISR-side re-arm without requiring an MCU reset.
+ */
+AraStatus_t BSP_UART_Fsus_EnsureRxArmed(void);
 
 /**
  * @brief Read bytes from USART2 RX ring buffer, up to len bytes.
@@ -82,6 +90,11 @@ void BSP_UART_Fsus_Flush(void);
  */
 uint32_t BSP_UART_Fsus_GetTxBytes(void);
 uint32_t BSP_UART_Fsus_GetRxBytes(void);
+uint32_t BSP_UART_Fsus_GetTxErrors(void);
+uint32_t BSP_UART_Fsus_GetRxErrors(void);
+uint32_t BSP_UART_Fsus_GetRxRearmFailures(void);
+uint32_t BSP_UART_Fsus_GetRxOverflows(void);
+uint32_t BSP_UART_Fsus_GetLastHalError(void);
 
 /**
  * @brief Bring-up diagnostics: cumulative bytes received on USART1 (ELRS)

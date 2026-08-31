@@ -47,6 +47,13 @@ typedef struct {
 void TaskManipulator_Init(void);
 
 /**
+ * @brief Seed the manipulator's hold target from an absolute encoder reading.
+ * @note  Call on startup and after an HX8 link recovery so AUTO_STALE / IDLE
+ *        cannot fall back to the historical 0 degree initializer.
+ */
+void TaskManipulator_SeedCurrentAngle(float current_angle_deg);
+
+/**
  * @brief Run one 50 Hz manipulator step.
  * @param arb       Arbiter decision for this tick.
  * @param mot_state Latest motion feedback (read-only).

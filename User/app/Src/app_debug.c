@@ -20,6 +20,7 @@
 #include "task_motion.h"   /* TASK_MOTION_ANGLE_MIN_DEG / MAX_DEG */
 #include "task_rc.h"       /* TaskRc_CopyRawChannels */
 #include "task_arbiter.h"  /* ARB_REASON_* enum for human-readable [DBG] */
+#include "bsp_i2c.h"       /* Direct read-only TOFSense-F2 P link probe. */
 
 #include "FreeRTOS.h"
 #include "task.h"
@@ -68,8 +69,76 @@ static void console_print_help(void)
         "  p <ch> <deg>=lock PTK (ch 0=grip,1=roll; deg 0..180; -1=release)\r\n"
         "  P=release both PTK channels back to RC\r\n"
         "  r=raw channel dump on/off\r\n"
+        "  i=probe TOFSense-F2 P I2C at default address 0x08\r\n"
         "  t=show latest gripper distance sample\r\n"
         "  ?=this help\r\n");
+}
+
+static uint16_t read_le16(const uint8_t *data)
+{
+    return (uint16_t)data[0] | ((uint16_t)data[1] << 8U);
+}
+
+static uint32_t read_le32(const uint8_t *data)
+{
+    return (uint32_t)data[0]
+         | ((uint32_t)data[1] << 8U)
+         | ((uint32_t)data[2] << 16U)
+         | ((uint32_t)data[3] << 24U);
+}
+
+/**
+ * Read-only TOFSense-F2 P communication check.
+ *
+ * The module's default I2C address is 0x08 (ID 0). Measurement registers
+ * 0x20..0x2F form one coherent 16-byte little-endian sample. This command
+ * deliberately performs no writes, so it cannot change the module mode, ID,
+ * refresh rate or filter settings.
+ */
+static void console_probe_tofsense_f2p(void)
+{
+    enum {
+        F2P_ADDRESS_7BIT = 0x08U,
+        F2P_DATA_REGISTER = 0x20U,
+        F2P_DATA_LENGTH = 16U,
+        F2P_TIMEOUT_MS = 20U,
+    };
+    uint8_t data[F2P_DATA_LENGTH];
+
+    AraStatus_t status = BSP_I2C_IsReady(F2P_ADDRESS_7BIT, F2P_TIMEOUT_MS);
+    if (status != ARA_OK) {
+        BSP_UART_Printf("[F2P] NACK addr=0x08 status=%d; check 5V/GND, mode and module ID\r\n",
+                        (int)status);
+        return;
+    }
+
+    status = BSP_I2C_ReadReg(F2P_ADDRESS_7BIT,
+                             F2P_DATA_REGISTER,
+                             data,
+                             F2P_DATA_LENGTH,
+                             F2P_TIMEOUT_MS);
+    if (status != ARA_OK) {
+        BSP_UART_Printf("[F2P] ACK addr=0x08 but register read failed status=%d\r\n",
+                        (int)status);
+        return;
+    }
+
+    const uint32_t sensor_time_ms = read_le32(&data[0]);
+    const int32_t distance_mm = (int32_t)read_le32(&data[4]);
+    const uint16_t range_status = read_le16(&data[8]);
+    const uint16_t signal_strength = read_le16(&data[10]);
+    const uint8_t precision_cm = data[12];
+    const uint16_t refresh_rate_hz = read_le16(&data[13]);
+    const uint8_t filter_factor = data[15];
+
+    BSP_UART_Printf("[F2P] OK addr=0x08 time=%lu ms distance=%ld mm valid=%u signal=%u precision=%u cm rate=%u Hz filter=%u\r\n",
+                    (unsigned long)sensor_time_ms,
+                    (long)distance_mm,
+                    (unsigned)(range_status == 1U),
+                    (unsigned)signal_strength,
+                    (unsigned)precision_cm,
+                    (unsigned)refresh_rate_hz,
+                    (unsigned)filter_factor);
 }
 
 static void console_read_tof(void)
@@ -297,6 +366,9 @@ static void console_poll(uint32_t tick_ms)
             BSP_UART_Printf("[DBG] raw channel dump %s\r\n",
                             s_raw_dump_active ? "ON (1 Hz)" : "OFF");
             break;
+        case 'i':
+            console_probe_tofsense_f2p();
+            break;
         case 't':
             console_read_tof();
             break;
@@ -383,6 +455,7 @@ static const char *reason_to_str(uint8_t r)
     case ARB_REASON_SERVO_OFFLINE:       return "NO_SERVO   ";
     case ARB_REASON_FAULT_PENDING_RESET: return "WAIT_RESET ";
     case ARB_REASON_HOME_ZERO:           return "HOME_ZERO  ";
+    case ARB_REASON_SERVO_STALL:         return "SERVO_STALL";
     default:                             return "?          ";
     }
 }
@@ -437,6 +510,20 @@ static void periodic_snapshot(void)
                     (unsigned long)DrvHC13_GetVisionFrames(),
                     (unsigned long)BSP_UART_RxDma_GetRecoveries(),
                     force_on ? " [FORCE]" : "");
+
+    BSP_UART_Printf("[SAFE] ch1=%d fb_age=%lu ms reconnect_guard=%d stall=%d encoder_jumps=%lu\r\n",
+                    (int)s.rc_ch1_percent,
+                    (unsigned long)s.servo_feedback_age_ms,
+                    s.servo_reconnect_guard ? 1 : 0,
+                    s.servo_stalled ? 1 : 0,
+                    (unsigned long)s.servo_encoder_jump_count);
+
+    BSP_UART_Printf("[BUS] txe=%lu rxe=%lu rearm=%lu overflow=%lu hal=0x%lX\r\n",
+                    (unsigned long)BSP_UART_Fsus_GetTxErrors(),
+                    (unsigned long)BSP_UART_Fsus_GetRxErrors(),
+                    (unsigned long)BSP_UART_Fsus_GetRxRearmFailures(),
+                    (unsigned long)BSP_UART_Fsus_GetRxOverflows(),
+                    (unsigned long)BSP_UART_Fsus_GetLastHalError());
 
     if (s_raw_dump_active) {
         raw_channel_dump();

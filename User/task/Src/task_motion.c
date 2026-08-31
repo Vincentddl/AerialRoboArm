@@ -17,10 +17,23 @@
 /* Last-sent target tracking for change detection. */
 static float    s_last_target_deg     = -999.0f;
 static bool     s_torque_active       = false;
+static uint32_t s_last_command_tx_ms  = 0U;
+static uint32_t s_last_stop_tx_ms     = 0U;
 static uint32_t s_last_feedback_ok_ms = 0U;
 static uint32_t s_last_feedback_poll_ms = 0U;
 static bool     s_last_feedback_valid = false;
 static FsusFeedback_t s_last_feedback;
+
+/* Encoder continuity diagnostics use only newly received monitor frames.
+ * Cached feedback must never be counted as a new physical observation. */
+static bool     s_encoder_prev_valid = false;
+static FsusFeedback_t s_encoder_prev_feedback;
+static uint32_t s_encoder_jump_count = 0U;
+
+#define ENCODER_DIAG_MAX_GAP_MS          (500U)
+#define ENCODER_DIAG_STATIC_BAND_DEG     (2.0f)
+#define ENCODER_DIAG_STATIC_JUMP_DEG     (5.0f)
+#define ENCODER_DIAG_DYNAMIC_MARGIN_DEG  (5.0f)
 
 #if TASK_MOTION_USE_MOCK
 /* Mock-mode servo simulator */
@@ -46,21 +59,77 @@ static float map_angle_to_fsus(float deg)
     return deg;
 }
 
+static float abs_float(float value)
+{
+    return (value < 0.0f) ? -value : value;
+}
+
+static void update_encoder_diagnostic(const MotionCmd_t *cmd,
+                                      bool command_changed,
+                                      MotionState_t *state)
+{
+    state->encoder_jump_suspected = false;
+    state->encoder_delta_deg = 0.0f;
+    state->encoder_jump_count = s_encoder_jump_count;
+
+    if (!state->feedback_fresh) {
+        return;
+    }
+
+    if (s_encoder_prev_valid) {
+        const uint32_t dt_ms =
+            state->feedback.timestamp_ms - s_encoder_prev_feedback.timestamp_ms;
+        const float delta = abs_float(state->feedback.angle_deg -
+                                      s_encoder_prev_feedback.angle_deg);
+        state->encoder_delta_deg = delta;
+
+        if (cmd->torque_on && (dt_ms > 0U) &&
+            (dt_ms <= ENCODER_DIAG_MAX_GAP_MS)) {
+            float allowed_delta =
+                abs_float(cmd->velocity_deg_per_s) * (float)dt_ms / 1000.0f +
+                ENCODER_DIAG_DYNAMIC_MARGIN_DEG;
+
+            const bool target_was_settled =
+                !command_changed &&
+                (abs_float(s_encoder_prev_feedback.angle_deg -
+                           map_angle_to_fsus(cmd->target_angle_deg)) <=
+                 ENCODER_DIAG_STATIC_BAND_DEG);
+            if (target_was_settled) {
+                allowed_delta = ENCODER_DIAG_STATIC_JUMP_DEG;
+            }
+
+            if (delta > allowed_delta) {
+                state->encoder_jump_suspected = true;
+                s_encoder_jump_count++;
+                state->encoder_jump_count = s_encoder_jump_count;
+            }
+        }
+    }
+
+    s_encoder_prev_feedback = state->feedback;
+    s_encoder_prev_valid = true;
+}
+
 /**
  * @brief FSUS transaction: send, then sync on response header 0x05 0x1C.
  * @param tx_buf    Encoded request frame.
  * @param tx_len    Request length.
  * @param rx_buf    Response buffer (>= FSUS_RX_BUF_SIZE).
  * @param timeout_ms Max wait.
- * @return Total response bytes received, or 0 on timeout.
+ * @return Total response bytes received, 0 on timeout, or -1 on TX failure.
  */
-static uint16_t fsus_transact(const uint8_t *tx_buf, uint16_t tx_len,
-                              uint8_t *rx_buf, uint32_t timeout_ms)
+static int16_t fsus_transact(const uint8_t *tx_buf, uint16_t tx_len,
+                             uint8_t *rx_buf, uint32_t timeout_ms)
 {
     /* Drop stale bytes before every request. A half-old response in the ring
      * buffer would otherwise look like a valid but unrelated servo reply. */
+    if (BSP_UART_Fsus_EnsureRxArmed() != ARA_OK) {
+        return -1;
+    }
     BSP_UART_Fsus_Flush();
-    BSP_UART_Fsus_Send(tx_buf, tx_len);
+    if (BSP_UART_Fsus_Send(tx_buf, tx_len) != ARA_OK) {
+        return -1;
+    }
 
     uint32_t deadline = HAL_GetTick() + timeout_ms;
     uint16_t total = 0U;
@@ -113,7 +182,6 @@ static uint16_t fsus_transact(const uint8_t *tx_buf, uint16_t tx_len,
 static FsusParseResult_t do_stop(uint8_t mode, uint16_t power_mw)
 {
     uint8_t tx[FSUS_TX_BUF_SIZE];
-    uint8_t rx[FSUS_RX_BUF_SIZE];
 
     uint16_t tx_len = DrvFsus_EncodeStop(tx, TASK_MOTION_SERVO_ID, mode, power_mw);
     if (tx_len == 0U) {
@@ -123,8 +191,9 @@ static FsusParseResult_t do_stop(uint8_t mode, uint16_t power_mw)
     /* Stop has no defined response; this is a fire-and-forget control frame.
      * In unlock mode it releases the servo's holding torque. */
     BSP_UART_Fsus_Flush();
-    BSP_UART_Fsus_Send(tx, tx_len);
-    return FSUS_PARSE_OK;
+    return (BSP_UART_Fsus_Send(tx, tx_len) == ARA_OK)
+               ? FSUS_PARSE_OK
+               : FSUS_PARSE_TX_FAILED;
 }
 
 static FsusParseResult_t do_set_angle(float    angle_deg,
@@ -134,7 +203,6 @@ static FsusParseResult_t do_set_angle(float    angle_deg,
                                        uint16_t power_mw)
 {
     uint8_t tx[FSUS_TX_BUF_SIZE];
-    uint8_t rx[FSUS_RX_BUF_SIZE];
 
     /* FSUS expects no response for SetAngleByVelocity by default.
      * Send and return OK — feedback is obtained via ServoMonitor. */
@@ -147,8 +215,9 @@ static FsusParseResult_t do_set_angle(float    angle_deg,
         return FSUS_PARSE_BAD_FRAME;
     }
     BSP_UART_Fsus_Flush();
-    BSP_UART_Fsus_Send(tx, tx_len);
-    return FSUS_PARSE_OK;
+    return (BSP_UART_Fsus_Send(tx, tx_len) == ARA_OK)
+               ? FSUS_PARSE_OK
+               : FSUS_PARSE_TX_FAILED;
 }
 
 static FsusParseResult_t do_ping(void)
@@ -161,11 +230,14 @@ static FsusParseResult_t do_ping(void)
         return FSUS_PARSE_BAD_FRAME;
     }
 
-    uint16_t rx_len = fsus_transact(tx, tx_len, rx, FSUS_IO_TIMEOUT_MS);
-    if (rx_len < 5U) {
+    int16_t rx_len = fsus_transact(tx, tx_len, rx, FSUS_IO_TIMEOUT_MS);
+    if (rx_len < 0) {
+        return FSUS_PARSE_TX_FAILED;
+    }
+    if (rx_len < 5) {
         return FSUS_PARSE_TIMEOUT;
     }
-    return DrvFsus_ParsePing(rx, rx_len, TASK_MOTION_SERVO_ID);
+    return DrvFsus_ParsePing(rx, (uint16_t)rx_len, TASK_MOTION_SERVO_ID);
 }
 
 static FsusParseResult_t do_read_feedback(uint32_t        tick_ms,
@@ -181,12 +253,19 @@ static FsusParseResult_t do_read_feedback(uint32_t        tick_ms,
         return FSUS_PARSE_BAD_FRAME;
     }
 
-    uint16_t rx_len = fsus_transact(tx, tx_len, rx, FSUS_IO_TIMEOUT_MS);
-    if (rx_len < 5U) {
+    int16_t rx_len = fsus_transact(tx, tx_len, rx, FSUS_IO_TIMEOUT_MS);
+    if (rx_len < 0) {
+        return FSUS_PARSE_TX_FAILED;
+    }
+    if (rx_len < 5) {
         return FSUS_PARSE_TIMEOUT;
     }
     /* Convert raw UART bytes into a typed feedback struct for the FSM. */
-    return DrvFsus_ParseServoMonitor(rx, rx_len, TASK_MOTION_SERVO_ID, tick_ms, out);
+    return DrvFsus_ParseServoMonitor(rx,
+                                     (uint16_t)rx_len,
+                                     TASK_MOTION_SERVO_ID,
+                                     tick_ms,
+                                     out);
 }
 
 #endif /* !TASK_MOTION_USE_MOCK */
@@ -199,10 +278,15 @@ void TaskMotion_Init(void)
 {
     s_last_target_deg = -999.0f;
     s_torque_active   = false;
+    s_last_command_tx_ms = 0U;
+    s_last_stop_tx_ms = 0U;
     s_last_feedback_ok_ms = 0U;
     s_last_feedback_poll_ms = 0U;
     s_last_feedback_valid = false;
     memset(&s_last_feedback, 0, sizeof(s_last_feedback));
+    s_encoder_prev_valid = false;
+    memset(&s_encoder_prev_feedback, 0, sizeof(s_encoder_prev_feedback));
+    s_encoder_jump_count = 0U;
 
 #if TASK_MOTION_USE_MOCK
     s_mock_pos_deg       = 0.0f;
@@ -264,10 +348,15 @@ void TaskMotion_Update(const MotionCmd_t *cmd,
     state->last_read_result  = FSUS_PARSE_OK;
     state->feedback          = fb;
     state->feedback_valid    = true;
+    state->feedback_fresh    = true;
+    state->feedback_age_ms   = 0U;
     state->servo_online      = true;
     state->is_moving         = (delta > 0.5f || delta < -0.5f);
     state->is_stalled        = false;
     state->is_overload       = false;
+    state->encoder_jump_suspected = false;
+    state->encoder_jump_count = 0U;
+    state->encoder_delta_deg = 0.0f;
 }
 
 #else /* ============ Real-servo path (FSUS) ============ */
@@ -280,6 +369,8 @@ void TaskMotion_Update(const MotionCmd_t *cmd,
         return;
     }
     memset(state, 0, sizeof(*state));
+    state->feedback_age_ms = UINT32_MAX;
+    state->encoder_jump_count = s_encoder_jump_count;
 
 #if TASK_MOTION_SKIP_PING_FOR_BENCH
     /* Bench mode short-circuit: HX8 / UC01 not powered. Pretend the main
@@ -293,10 +384,13 @@ void TaskMotion_Update(const MotionCmd_t *cmd,
     state->feedback.angle_deg    = 0.0f;
     state->feedback.timestamp_ms = tick_ms;
     state->feedback_valid    = true;
+    state->feedback_fresh    = true;
+    state->feedback_age_ms   = 0U;
     state->servo_online      = true;
     state->is_moving         = false;
     state->is_stalled        = false;
     state->is_overload       = false;
+    update_encoder_diagnostic(cmd, false, state);
     return;
 #endif
 
@@ -314,14 +408,19 @@ void TaskMotion_Update(const MotionCmd_t *cmd,
         }
         if (state->last_read_result == FSUS_PARSE_OK) {
             state->feedback_valid = true;
+            state->feedback_fresh = true;
+            state->feedback_age_ms = 0U;
             state->servo_online   = true;
             s_last_feedback = state->feedback;
             s_last_feedback_valid = true;
             s_last_feedback_ok_ms = tick_ms;
             s_last_feedback_poll_ms = tick_ms;
+            update_encoder_diagnostic(cmd, false, state);
         }
         return;
     }
+
+    bool command_changed = false;
 
     /* --- Torque transition ---
      * Protocol-level meaning:
@@ -338,12 +437,20 @@ void TaskMotion_Update(const MotionCmd_t *cmd,
             if (state->last_write_result == FSUS_PARSE_OK) {
                 s_torque_active   = true;
                 s_last_target_deg = target_deg;
+                s_last_command_tx_ms = tick_ms;
+                s_last_stop_tx_ms = 0U;
+                command_changed   = true;
             }
         } else {
             /* Disable: stop and unlock. */
             state->last_write_result = do_stop(FSUS_STOP_MODE_UNLOCK, 0U);
-            s_torque_active   = false;
-            s_last_target_deg = -999.0f;
+            if (state->last_write_result == FSUS_PARSE_OK) {
+                s_torque_active   = false;
+                s_last_target_deg = -999.0f;
+                s_last_command_tx_ms = 0U;
+                s_last_stop_tx_ms = tick_ms;
+                s_encoder_prev_valid = false;
+            }
         }
     } else if (cmd->torque_on) {
         /* --- Target change detection ---
@@ -352,8 +459,11 @@ void TaskMotion_Update(const MotionCmd_t *cmd,
         float diff = target_deg - s_last_target_deg;
         if (diff < 0.0f) diff = -diff;
         bool changed = (diff > 0.5f) || cmd->force_update;
+        bool refresh_due = (s_last_command_tx_ms == 0U) ||
+            ((uint32_t)(tick_ms - s_last_command_tx_ms) >=
+             TASK_MOTION_COMMAND_REFRESH_MS);
 
-        if (changed) {
+        if (changed || refresh_due) {
             state->last_write_result = do_set_angle(target_deg,
                                                     cmd->velocity_deg_per_s,
                                                     cmd->t_acc_ms,
@@ -361,12 +471,24 @@ void TaskMotion_Update(const MotionCmd_t *cmd,
                                                     cmd->power_mw);
             if (state->last_write_result == FSUS_PARSE_OK) {
                 s_last_target_deg = target_deg;
+                s_last_command_tx_ms = tick_ms;
+                command_changed   = changed;
             }
         } else {
             state->last_write_result = FSUS_PARSE_OK;
         }
     } else {
-        state->last_write_result = FSUS_PARSE_OK;
+        const bool stop_refresh_due = (s_last_stop_tx_ms == 0U) ||
+            ((uint32_t)(tick_ms - s_last_stop_tx_ms) >=
+             TASK_MOTION_STOP_REFRESH_MS);
+        if (stop_refresh_due) {
+            state->last_write_result = do_stop(FSUS_STOP_MODE_UNLOCK, 0U);
+            if (state->last_write_result == FSUS_PARSE_OK) {
+                s_last_stop_tx_ms = tick_ms;
+            }
+        } else {
+            state->last_write_result = FSUS_PARSE_OK;
+        }
     }
 
     /* --- Periodically read feedback ---
@@ -386,8 +508,10 @@ void TaskMotion_Update(const MotionCmd_t *cmd,
         state->feedback.timestamp_ms = tick_ms;
     }
 
-    if (state->last_read_result == FSUS_PARSE_OK) {
+    if (should_poll && (state->last_read_result == FSUS_PARSE_OK)) {
         state->feedback_valid = true;
+        state->feedback_fresh = true;
+        state->feedback_age_ms = 0U;
         state->servo_online   = true;
         s_last_feedback = state->feedback;
         s_last_feedback_valid = true;
@@ -396,15 +520,25 @@ void TaskMotion_Update(const MotionCmd_t *cmd,
         /* Motion classification from servo status byte. */
         uint8_t st = state->feedback.status;
         state->is_stalled  = ((st >> 2) & 0x01U) != 0U;  /* BIT2 = stall */
-        state->is_overload = (st != 0U);                   /* any fault */
-        state->is_moving   = !state->is_stalled;           /* rough */
+        state->is_overload = (st & 0xFEU) != 0U;           /* BIT1..7 faults */
+        state->is_moving   = (st & 0x01U) != 0U;           /* BIT0 executing */
+        update_encoder_diagnostic(cmd, command_changed, state);
     } else if (s_last_feedback_valid &&
                ((uint32_t)(tick_ms - s_last_feedback_ok_ms) <= TASK_MOTION_ONLINE_GRACE_MS)) {
         state->feedback = s_last_feedback;
         state->feedback.timestamp_ms = tick_ms;
         state->feedback_valid = true;
+        state->feedback_fresh = false;
+        state->feedback_age_ms = (uint32_t)(tick_ms - s_last_feedback_ok_ms);
         state->servo_online = true;
+
+        uint8_t st = state->feedback.status;
+        state->is_stalled  = ((st >> 2) & 0x01U) != 0U;
+        state->is_overload = (st & 0xFEU) != 0U;
+        state->is_moving   = (st & 0x01U) != 0U;
     }
+
+    state->encoder_jump_count = s_encoder_jump_count;
 }
 
 #endif /* TASK_MOTION_USE_MOCK */

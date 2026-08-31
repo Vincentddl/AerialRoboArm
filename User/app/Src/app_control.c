@@ -47,9 +47,9 @@ static ArbiterOutput_t  s_arb;
 static MotionCmd_t      s_mcmd;
 static MotionState_t    s_mstate;
 
-/* Force-mode bring-up state. When s_force_active is true, step_running
- * skips Arbiter/Manipulator and drives TaskMotion_Update directly with
- * s_force_angle_deg. Toggled exclusively via DBG_REQ_FORCE_GOTO_ANGLE. */
+/* Force-mode bring-up state. When s_force_active is true, step_running skips
+ * normal Arbiter/Manipulator target selection but still applies feedback-age
+ * and stall safety before driving TaskMotion_Update directly. */
 static bool    s_force_active     = false;
 static int16_t s_force_angle_deg  = 0;
 
@@ -60,11 +60,24 @@ static int16_t s_ptk_gripper_force_deg = -1;
 static int16_t s_ptk_roll_force_deg    = -1;
 
 /* Two-step reset latch. ControlTask owns this so arbiter can stay a pure
- * function. Set to true when arbiter reports a latching fault (SD active,
- * RC loss); cleared when arbiter signals fault_reset_consumed. */
+ * function. Set by SD, RC loss, or a fresh HX8 stall report; cleared only
+ * when arbiter signals fault_reset_consumed after the cause is gone. */
 static bool    s_fault_latched    = false;
 
 #define APP_CONTROL_STARTUP_HOLD_MS (300U)
+#define APP_CONTROL_FEEDBACK_MAX_AGE_MS (TASK_MOTION_FEEDBACK_PERIOD_MS)
+#define APP_CONTROL_RECONNECT_CENTER_MS  (300U)
+
+/* A telemetry outage must not allow CH1 to accumulate an unseen target.
+ * When fresh HX8 feedback returns, manual control stays parked at the
+ * encoder position until CH1 has remained centered for a short interval. */
+static bool     s_servo_control_ready = false;
+static bool     s_servo_was_control_ready = false;
+static bool     s_reconnect_guard_active = true;
+static uint32_t s_reconnect_center_since_ms = 0U;
+static int16_t  s_reconnect_hold_angle_deg = 0;
+static int16_t  s_last_known_servo_angle_deg = 0;
+static bool     s_last_known_servo_angle_valid = false;
 
 /* =============================================================================
  * Helpers
@@ -92,6 +105,93 @@ static AraLedPattern_t led_for_phase(ControlPhase_t p, AraLedPattern_t arb_led)
     }
 }
 
+static int16_t clamp_round_servo_angle(float angle_deg)
+{
+    int32_t rounded = (angle_deg >= 0.0f)
+                          ? (int32_t)(angle_deg + 0.5f)
+                          : (int32_t)(angle_deg - 0.5f);
+    if (rounded < TASK_MOTION_ANGLE_MIN_DEG) rounded = TASK_MOTION_ANGLE_MIN_DEG;
+    if (rounded > TASK_MOTION_ANGLE_MAX_DEG) rounded = TASK_MOTION_ANGLE_MAX_DEG;
+    return (int16_t)rounded;
+}
+
+static void seed_arm_target_from_encoder(float angle_deg)
+{
+    const int16_t safe_angle = clamp_round_servo_angle(angle_deg);
+    s_last_known_servo_angle_deg = safe_angle;
+    s_last_known_servo_angle_valid = true;
+    s_reconnect_hold_angle_deg = safe_angle;
+    TaskRc_ReseedIncremental(safe_angle);
+    s_rc.incremental_angle_deg = safe_angle;
+    TaskManipulator_SeedCurrentAngle((float)safe_angle);
+}
+
+static void apply_servo_link_safety(uint32_t now_ms)
+{
+    if (s_mstate.feedback_fresh && s_mstate.is_stalled) {
+        /* A real monitor frame reported HX8 BIT2. Keep all later commands
+         * invalid until feedback clears and the operator performs reset. */
+        s_fault_latched = true;
+        seed_arm_target_from_encoder(s_mstate.feedback.angle_deg);
+        s_reconnect_guard_active = true;
+        s_reconnect_center_since_ms = 0U;
+    }
+
+    if (s_mstate.feedback_fresh && s_mstate.feedback_valid) {
+        s_last_known_servo_angle_deg =
+            clamp_round_servo_angle(s_mstate.feedback.angle_deg);
+        s_last_known_servo_angle_valid = true;
+    }
+
+    s_servo_control_ready =
+        s_mstate.servo_online &&
+        s_mstate.feedback_valid &&
+        /* Normal cached ages are 20/40/60/80 ms. Reaching one complete
+         * 100 ms poll period means the scheduled monitor frame was missed. */
+        (s_mstate.feedback_age_ms < APP_CONTROL_FEEDBACK_MAX_AGE_MS);
+
+    if (!s_servo_control_ready) {
+        /* Undo any CH1 integration performed by TaskRc_Update this tick. */
+        if (s_last_known_servo_angle_valid) {
+            TaskRc_ReseedIncremental(s_last_known_servo_angle_deg);
+            s_rc.incremental_angle_deg = s_last_known_servo_angle_deg;
+        }
+        s_reconnect_guard_active = true;
+        s_reconnect_center_since_ms = 0U;
+    } else if (!s_servo_was_control_ready) {
+        /* First trustworthy frame after startup/outage: hold exactly where
+         * the physical encoder says the arm is, never the accumulated RC target. */
+        seed_arm_target_from_encoder(s_mstate.feedback.angle_deg);
+        s_reconnect_guard_active = true;
+        s_reconnect_center_since_ms = 0U;
+    }
+
+    s_servo_was_control_ready = s_servo_control_ready;
+
+    if (s_reconnect_guard_active &&
+        s_servo_control_ready &&
+        (s_rc.req_mode == ARA_MODE_MANUAL)) {
+        /* Keep overwriting the accumulator while the operator recenters CH1. */
+        TaskRc_ReseedIncremental(s_reconnect_hold_angle_deg);
+        s_rc.incremental_angle_deg = s_reconnect_hold_angle_deg;
+
+        int16_t abs_ch1 = (s_rc.ch1_percent >= 0)
+                             ? s_rc.ch1_percent
+                             : (int16_t)(-s_rc.ch1_percent);
+        if (abs_ch1 <= MOD_RC_CH1_DEADBAND_PCT) {
+            if (s_reconnect_center_since_ms == 0U) {
+                s_reconnect_center_since_ms = now_ms;
+            } else if ((uint32_t)(now_ms - s_reconnect_center_since_ms) >=
+                       APP_CONTROL_RECONNECT_CENTER_MS) {
+                s_reconnect_guard_active = false;
+                seed_arm_target_from_encoder(s_mstate.feedback.angle_deg);
+            }
+        } else {
+            s_reconnect_center_since_ms = 0U;
+        }
+    }
+}
+
 static void publish_hub(uint32_t now_ms, uint32_t loop_count)
 {
     DataHub_t snap;
@@ -116,12 +216,17 @@ static void publish_hub(uint32_t now_ms, uint32_t loop_count)
         snap.servo_voltage_dv         = (uint8_t)(s_mstate.feedback.voltage_mv / 100U);
         snap.servo_moving             = s_mstate.is_moving;
     }
-    snap.servo_status = s_mstate.servo_online ? ARA_OK : ARA_ERR_DISCONNECTED;
+    snap.servo_status = s_servo_control_ready ? ARA_OK : ARA_ERR_DISCONNECTED;
     snap.servo_last_write_result = (uint8_t)s_mstate.last_write_result;
     snap.servo_last_read_result  = (uint8_t)s_mstate.last_read_result;
+    snap.servo_feedback_age_ms = s_mstate.feedback_age_ms;
+    snap.servo_encoder_jump_count = s_mstate.encoder_jump_count;
+    snap.servo_stalled = s_mstate.is_stalled;
 
     snap.rc_link_up      = s_rc.is_link_up;
     snap.vision_link_up  = s_vis.target_present;
+    snap.rc_ch1_percent  = s_rc.ch1_percent;
+    snap.servo_reconnect_guard = s_reconnect_guard_active;
     snap.rc_last_ok_ms   = now_ms;      /* refined later when link timestamps tracked */
     snap.vision_last_ok_ms = s_vis.last_update_tick_ms;
 
@@ -227,6 +332,7 @@ static void step_ping(uint32_t now_ms)
     if (ms.servo_online && ms.feedback_valid) {
         s_mstate = ms;
         s_startup_hold_angle_deg = ms.feedback.angle_deg;
+        seed_arm_target_from_encoder(ms.feedback.angle_deg);
         enter_phase(CTRL_PHASE_SERVO_CONFIG, now_ms);
     } else {
         s_ping_attempts++;
@@ -269,6 +375,7 @@ static void step_enable(uint32_t now_ms)
 
     TaskMotion_Update(&s_mcmd, now_ms, &s_mstate);
     TaskRc_ReseedIncremental((int16_t)s_startup_hold_angle_deg);
+    TaskManipulator_SeedCurrentAngle(s_startup_hold_angle_deg);
 
     if ((uint32_t)(now_ms - s_phase_enter_ms) >= APP_CONTROL_STARTUP_HOLD_MS) {
         enter_phase(CTRL_PHASE_RUNNING, now_ms);
@@ -283,6 +390,24 @@ static void step_fault(uint32_t now_ms)
 
 static void step_running_force(uint32_t now_ms)
 {
+    TaskVision_Update(now_ms, &s_vis);
+    apply_servo_link_safety(now_ms);
+
+    if (!s_servo_control_ready || s_mstate.is_stalled) {
+        /* RTT force mode is a diagnostic convenience, not a safety bypass.
+         * Drop it immediately when physical feedback is stale or stalled. */
+        s_mcmd.torque_on          = false;
+        s_mcmd.target_angle_deg   = (float)s_last_known_servo_angle_deg;
+        s_mcmd.velocity_deg_per_s = 0.0f;
+        s_mcmd.t_acc_ms           = 0U;
+        s_mcmd.t_dec_ms           = 0U;
+        s_mcmd.power_mw           = 0U;
+        s_mcmd.force_update       = false;
+        TaskMotion_Update(&s_mcmd, now_ms, &s_mstate);
+        s_force_active = false;
+        return;
+    }
+
     s_mcmd.torque_on          = true;
     s_mcmd.target_angle_deg   = (float)s_force_angle_deg;
     s_mcmd.velocity_deg_per_s = TASK_MOTION_DEFAULT_VELOCITY;
@@ -292,8 +417,6 @@ static void step_running_force(uint32_t now_ms)
     s_mcmd.force_update       = false;
 
     TaskMotion_Update(&s_mcmd, now_ms, &s_mstate);
-
-    TaskVision_Update(now_ms, &s_vis);
 }
 
 static void step_running_normal(uint32_t now_ms)
@@ -313,10 +436,13 @@ static void step_running_normal(uint32_t now_ms)
         s_rc.incremental_angle_deg = current_deg;
     }
 
+    apply_servo_link_safety(now_ms);
+
     ArbiterInput_t in = {
         .rc              = &s_rc,
         .vision          = &s_vis,
-        .servo_online    = s_mstate.servo_online,
+        .servo_online    = s_servo_control_ready,
+        .servo_stall_active = s_mstate.is_stalled,
         .tick_ms         = now_ms,
         .prev_mode       = s_arb.mode,
         .vision_stale_ms = ARBITER_DEFAULT_VISION_STALE_MS,
@@ -422,6 +548,13 @@ void App_Control_InitDeps(void)
     s_startup_hold_angle_deg = 0.0f;
     s_heartbeat_ms   = 0U;
     s_fault_latched  = false;
+    s_servo_control_ready = false;
+    s_servo_was_control_ready = false;
+    s_reconnect_guard_active = true;
+    s_reconnect_center_since_ms = 0U;
+    s_reconnect_hold_angle_deg = 0;
+    s_last_known_servo_angle_deg = 0;
+    s_last_known_servo_angle_valid = false;
 }
 
 void App_Control_Init(void)
