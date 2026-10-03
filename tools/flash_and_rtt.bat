@@ -54,9 +54,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-Process openocd -Err
 
 echo [3/4] Flash and verify firmware with DAPLink...
 "%OPENOCD%" ^
-    -c "tcl_port disabled" ^
-    -c "gdb_port disabled" ^
-    -c "telnet_port disabled" ^
+    -c "tcl port disabled" ^
+    -c "gdb port disabled" ^
+    -c "telnet port disabled" ^
     -f "%DAPLINK_CFG%" ^
     -c "program {%ELF_TCL%} verify reset exit"
 

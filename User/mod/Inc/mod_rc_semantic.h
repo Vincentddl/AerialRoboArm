@@ -2,7 +2,8 @@
  * @file mod_rc_semantic.h
  * @brief RC Semantic Mapping Module (L3)
  * @note  Pure logic layer. Converts raw CRSF channels into high-level system
- *        intents. Strictly no floating-point math. No hardware calls.
+ *        intents. Uses fixed-point integration with a fractional-degree
+ *        output. No hardware calls.
  */
 
 #ifndef MOD_RC_SEMANTIC_H
@@ -25,10 +26,10 @@
  * @brief CH1 rate-integrated target. Stick outside deadband acts like a
  *        velocity command; target is integrated every control update.
  */
-#define MOD_RC_CH1_DEADBAND_PCT       (15)
-/* Keep the target generator below the 300 deg/s actuator command so the
+#define MOD_RC_CH1_DEADBAND_PCT       (10)
+/* Keep the target generator below the 220 deg/s actuator command so the
  * servo does not build up a hidden following error after the stick returns. */
-#define MOD_RC_CH1_RATE_MAX_DEG_PER_S (240)
+#define MOD_RC_CH1_RATE_MAX_DEG_PER_S (150)
 
 /**
  * @brief CH1 threshold for entering EXTEND state.
@@ -108,8 +109,7 @@ typedef struct {
     bool        sb_pulse_active;   /**< Whether SB pulse is currently active. */
     bool        se_last_active;    /**< Last decoded SE home switch state. */
 
-    /* CH1 incremental stepping */
-    int16_t     inc_target_deg;    /**< Accumulated target angle, rounded degrees. */
+    /* CH1 fractional target integration */
     int32_t     inc_target_q8;     /**< Accumulated target angle in deg * 256. */
     uint32_t    inc_last_step_ms;  /**< Tick of last integration update. */
 

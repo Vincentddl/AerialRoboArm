@@ -421,6 +421,7 @@ void TaskMotion_Update(const MotionCmd_t *cmd,
     }
 
     bool command_changed = false;
+    bool control_frame_sent = false;
 
     /* --- Torque transition ---
      * Protocol-level meaning:
@@ -440,6 +441,7 @@ void TaskMotion_Update(const MotionCmd_t *cmd,
                 s_last_command_tx_ms = tick_ms;
                 s_last_stop_tx_ms = 0U;
                 command_changed   = true;
+                control_frame_sent = true;
             }
         } else {
             /* Disable: stop and unlock. */
@@ -450,6 +452,7 @@ void TaskMotion_Update(const MotionCmd_t *cmd,
                 s_last_command_tx_ms = 0U;
                 s_last_stop_tx_ms = tick_ms;
                 s_encoder_prev_valid = false;
+                control_frame_sent = true;
             }
         }
     } else if (cmd->torque_on) {
@@ -458,12 +461,15 @@ void TaskMotion_Update(const MotionCmd_t *cmd,
          * The servo keeps running its internal closed loop after one command. */
         float diff = target_deg - s_last_target_deg;
         if (diff < 0.0f) diff = -diff;
-        bool changed = (diff > 0.5f) || cmd->force_update;
+        bool changed = (diff > 0.2f) || cmd->force_update;
+        bool target_interval_due = (s_last_command_tx_ms == 0U) ||
+            ((uint32_t)(tick_ms - s_last_command_tx_ms) >=
+             TASK_MOTION_TARGET_INTERVAL_MS);
         bool refresh_due = (s_last_command_tx_ms == 0U) ||
             ((uint32_t)(tick_ms - s_last_command_tx_ms) >=
              TASK_MOTION_COMMAND_REFRESH_MS);
 
-        if (changed || refresh_due) {
+        if (target_interval_due && (changed || refresh_due)) {
             state->last_write_result = do_set_angle(target_deg,
                                                     cmd->velocity_deg_per_s,
                                                     cmd->t_acc_ms,
@@ -473,6 +479,7 @@ void TaskMotion_Update(const MotionCmd_t *cmd,
                 s_last_target_deg = target_deg;
                 s_last_command_tx_ms = tick_ms;
                 command_changed   = changed;
+                control_frame_sent = true;
             }
         } else {
             state->last_write_result = FSUS_PARSE_OK;
@@ -485,6 +492,7 @@ void TaskMotion_Update(const MotionCmd_t *cmd,
             state->last_write_result = do_stop(FSUS_STOP_MODE_UNLOCK, 0U);
             if (state->last_write_result == FSUS_PARSE_OK) {
                 s_last_stop_tx_ms = tick_ms;
+                control_frame_sent = true;
             }
         } else {
             state->last_write_result = FSUS_PARSE_OK;
@@ -498,6 +506,13 @@ void TaskMotion_Update(const MotionCmd_t *cmd,
      * intentionally decimated and cached between successful monitor frames. */
     bool should_poll = (!s_last_feedback_valid) ||
                        ((uint32_t)(tick_ms - s_last_feedback_poll_ms) >= TASK_MOTION_FEEDBACK_PERIOD_MS);
+
+    /* Never place a monitor query immediately behind a motion/Stop frame.
+     * Defer it to the next 20 ms control tick, comfortably beyond the
+     * protocol's 5-10 ms minimum command interval. */
+    if (control_frame_sent && s_last_feedback_valid) {
+        should_poll = false;
+    }
 
     if (should_poll) {
         state->last_read_result = do_read_feedback(tick_ms, &state->feedback);

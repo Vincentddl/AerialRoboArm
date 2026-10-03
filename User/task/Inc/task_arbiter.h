@@ -73,7 +73,7 @@ typedef struct {
     /** True when the arbiter wants torque applied to the servo. */
     bool              torque_request;
     /** Target joint angle in degrees. */
-    int16_t           target_angle_deg;
+    float             target_angle_deg;
     /** Target traversal speed, deg/s. 0 selects the safe AUTO default. */
     uint16_t          target_speed;
     /** Acceleration register value (0..254). */

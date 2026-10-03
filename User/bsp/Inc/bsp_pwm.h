@@ -9,6 +9,12 @@
 
 #include "ara_def.h"
 
+/* SERVO2/PA1 is not connected during the current bench bring-up. Set to 1
+ * after the roll servo is installed to restore its PWM output. */
+#ifndef BSP_PWM_ENABLE_SERVO_2
+#define BSP_PWM_ENABLE_SERVO_2 (0U)
+#endif
+
 /* --- Device Definition --- */
 typedef enum {
     BSP_SERVO_1 = 0,    // Gripper / Aux Axis

@@ -18,6 +18,12 @@ cmake-build-*/
 *.bin
 *.d
 *.map
+node_modules/
+outputs/
+tmp/
+__pycache__/
+*.pyc
+tmp_bom_analysis.xlsx
 
 # Claude AI 会话数据
 .claude/

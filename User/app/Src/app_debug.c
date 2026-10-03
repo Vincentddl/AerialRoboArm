@@ -407,6 +407,7 @@ static void led_render(uint32_t tick_ms)
  * ============================================================================= */
 
 static uint32_t s_snapshot_print_counter = 0U;
+
 /* Tracks last seen ELRS link state so we only print on edges (connect/disconnect).
  * Init to -1 (neither 0 nor 1) so the first observed state always prints once. */
 static int8_t   s_last_rc_link_up = -1;
@@ -524,6 +525,13 @@ static void periodic_snapshot(void)
                     (unsigned long)BSP_UART_Fsus_GetRxRearmFailures(),
                     (unsigned long)BSP_UART_Fsus_GetRxOverflows(),
                     (unsigned long)BSP_UART_Fsus_GetLastHalError());
+
+    BSP_UART_Printf("[PWR] voltage=%d mV current=%d mA power=%d mW temp_adc=%d status=0x%02X\r\n",
+                    (int)s.servo_voltage_mv,
+                    (int)s.servo_load,
+                    (int)s.servo_power_mw,
+                    (int)s.servo_temp_raw,
+                    (unsigned)s.servo_hw_status);
 
     if (s_raw_dump_active) {
         raw_channel_dump();

@@ -65,7 +65,13 @@ static int16_t s_ptk_roll_force_deg    = -1;
 static bool    s_fault_latched    = false;
 
 #define APP_CONTROL_STARTUP_HOLD_MS (300U)
-#define APP_CONTROL_FEEDBACK_MAX_AGE_MS (TASK_MOTION_FEEDBACK_PERIOD_MS)
+#define APP_CONTROL_SERVO_RETRY_MS  (500U)
+/* Monitor queries run every 100 ms, but a control frame intentionally defers
+ * a due query by one 20 ms tick. Allow that plus one scheduler tick before
+ * freezing motion on missing physical feedback. */
+#define APP_CONTROL_FEEDBACK_MAX_AGE_MS (TASK_MOTION_FEEDBACK_PERIOD_MS + (2U * ARA_PERIOD_CONTROL_MS))
+#define APP_CONTROL_FORCE_FEEDBACK_MAX_AGE_MS APP_CONTROL_FEEDBACK_MAX_AGE_MS
+#define APP_CONTROL_LINK_LOST_AGE_MS    (300U)
 #define APP_CONTROL_RECONNECT_CENTER_MS  (300U)
 
 /* A telemetry outage must not allow CH1 to accumulate an unseen target.
@@ -143,14 +149,18 @@ static void apply_servo_link_safety(uint32_t now_ms)
         s_last_known_servo_angle_valid = true;
     }
 
-    s_servo_control_ready =
+    const bool feedback_recent =
         s_mstate.servo_online &&
         s_mstate.feedback_valid &&
-        /* Normal cached ages are 20/40/60/80 ms. Reaching one complete
-         * 100 ms poll period means the scheduled monitor frame was missed. */
+        (s_mstate.feedback_age_ms < APP_CONTROL_LINK_LOST_AGE_MS);
+
+    s_servo_control_ready =
+        feedback_recent &&
+        /* A query can be deferred behind a control frame. Freeze only after
+         * that scheduled deferral has elapsed without a new monitor frame. */
         (s_mstate.feedback_age_ms < APP_CONTROL_FEEDBACK_MAX_AGE_MS);
 
-    if (!s_servo_control_ready) {
+    if (!feedback_recent) {
         /* Undo any CH1 integration performed by TaskRc_Update this tick. */
         if (s_last_known_servo_angle_valid) {
             TaskRc_ReseedIncremental(s_last_known_servo_angle_deg);
@@ -158,6 +168,20 @@ static void apply_servo_link_safety(uint32_t now_ms)
         }
         s_reconnect_guard_active = true;
         s_reconnect_center_since_ms = 0U;
+        s_servo_was_control_ready = false;
+    } else if (!s_servo_control_ready) {
+        /* A missed monitor frame freezes motion for this tick, but is not yet
+         * a hard disconnect. Preserve a completed reconnect guard. */
+        if (s_last_known_servo_angle_valid) {
+            TaskRc_ReseedIncremental(s_last_known_servo_angle_deg);
+            s_rc.incremental_angle_deg = s_last_known_servo_angle_deg;
+        }
+        int16_t abs_ch1 = (s_rc.ch1_percent >= 0)
+                             ? s_rc.ch1_percent
+                             : (int16_t)(-s_rc.ch1_percent);
+        if (abs_ch1 > MOD_RC_CH1_DEADBAND_PCT) {
+            s_reconnect_center_since_ms = 0U;
+        }
     } else if (!s_servo_was_control_ready) {
         /* First trustworthy frame after startup/outage: hold exactly where
          * the physical encoder says the arm is, never the accumulated RC target. */
@@ -166,7 +190,9 @@ static void apply_servo_link_safety(uint32_t now_ms)
         s_reconnect_center_since_ms = 0U;
     }
 
-    s_servo_was_control_ready = s_servo_control_ready;
+    if (s_servo_control_ready) {
+        s_servo_was_control_ready = true;
+    }
 
     if (s_reconnect_guard_active &&
         s_servo_control_ready &&
@@ -197,11 +223,21 @@ static void publish_hub(uint32_t now_ms, uint32_t loop_count)
     DataHub_t snap;
     memset(&snap, 0, sizeof(snap));
 
-    snap.current_mode             = (s_phase == CTRL_PHASE_RUNNING) ? s_arb.mode : ARA_MODE_INIT;
+    if (s_phase == CTRL_PHASE_RUNNING) {
+        snap.current_mode = s_arb.mode;
+        snap.arbiter_mode = s_arb.mode;
+        snap.arbiter_reason_code = (uint8_t)s_arb.reason_code;
+    } else if (s_phase == CTRL_PHASE_FAULT) {
+        snap.current_mode = ARA_MODE_ERROR;
+        snap.arbiter_mode = ARA_MODE_ERROR;
+        snap.arbiter_reason_code = (uint8_t)ARB_REASON_SERVO_OFFLINE;
+    } else {
+        snap.current_mode = ARA_MODE_INIT;
+        snap.arbiter_mode = ARA_MODE_INIT;
+        snap.arbiter_reason_code = (uint8_t)ARB_REASON_BOOT;
+    }
     snap.estop_active             = s_arb.estop || (s_phase != CTRL_PHASE_RUNNING);
     snap.led_pattern              = led_for_phase(s_phase, s_arb.led_pattern);
-    snap.arbiter_mode             = s_arb.mode;
-    snap.arbiter_reason_code      = (uint8_t)s_arb.reason_code;
 
     snap.servo_target_angle_deg   = (int16_t)(s_arb.target_angle_deg * 10);
     snap.servo_target_speed       = s_arb.target_speed;
@@ -214,6 +250,10 @@ static void publish_hub(uint32_t now_ms, uint32_t loop_count)
         snap.servo_position_angle_deg = (int16_t)(s_mstate.feedback.angle_deg * 10.0f);
         snap.servo_load               = s_mstate.feedback.current_ma;
         snap.servo_voltage_dv         = (uint8_t)(s_mstate.feedback.voltage_mv / 100U);
+        snap.servo_voltage_mv         = s_mstate.feedback.voltage_mv;
+        snap.servo_power_mw           = s_mstate.feedback.power_mw;
+        snap.servo_temp_raw           = s_mstate.feedback.temp_raw;
+        snap.servo_hw_status          = s_mstate.feedback.status;
         snap.servo_moving             = s_mstate.is_moving;
     }
     snap.servo_status = s_servo_control_ready ? ARA_OK : ARA_ERR_DISCONNECTED;
@@ -329,8 +369,10 @@ static void step_ping(uint32_t now_ms)
     };
     MotionState_t ms;
     TaskMotion_Update(&probe, now_ms, &ms);
+    /* Publish failed Ping/Monitor diagnostics too. Without this assignment
+     * RTT misleadingly showed rd=0/fb_age=0 while USART2 received nothing. */
+    s_mstate = ms;
     if (ms.servo_online && ms.feedback_valid) {
-        s_mstate = ms;
         s_startup_hold_angle_deg = ms.feedback.angle_deg;
         seed_arm_target_from_encoder(ms.feedback.angle_deg);
         enter_phase(CTRL_PHASE_SERVO_CONFIG, now_ms);
@@ -384,8 +426,12 @@ static void step_enable(uint32_t now_ms)
 
 static void step_fault(uint32_t now_ms)
 {
-    (void)now_ms;
-    /* Idle loop. Exits via DBG_REQ_CLEAR_FAULT. */
+    /* Startup reachability faults retry autonomously. Control recovery must
+     * not depend on an attached DAPLink/RTT console sending the 'f' key. */
+    if ((uint32_t)(now_ms - s_phase_enter_ms) >= APP_CONTROL_SERVO_RETRY_MS) {
+        s_ping_attempts = 0U;
+        enter_phase(CTRL_PHASE_SERVO_PING, now_ms);
+    }
 }
 
 static void step_running_force(uint32_t now_ms)
@@ -393,7 +439,11 @@ static void step_running_force(uint32_t now_ms)
     TaskVision_Update(now_ms, &s_vis);
     apply_servo_link_safety(now_ms);
 
-    if (!s_servo_control_ready || s_mstate.is_stalled) {
+    const bool force_feedback_ready =
+        s_mstate.servo_online &&
+        s_mstate.feedback_valid &&
+        (s_mstate.feedback_age_ms < APP_CONTROL_FORCE_FEEDBACK_MAX_AGE_MS);
+    if (!force_feedback_ready || s_mstate.is_stalled) {
         /* RTT force mode is a diagnostic convenience, not a safety bypass.
          * Drop it immediately when physical feedback is stale or stalled. */
         s_mcmd.torque_on          = false;

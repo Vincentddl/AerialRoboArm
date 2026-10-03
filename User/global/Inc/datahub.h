@@ -91,7 +91,7 @@ typedef struct {
     bool            home_to_zero_pulse; /**< Edge-triggered SE pulse: command HX8 back to 0 deg. */
     uint16_t        aux_knob_val;    /**< SF, normalised [0, 1000]. */
     int16_t         ch1_percent;           /**< CH1 analog -100..+100, for manual angle. */
-    int16_t         incremental_angle_deg; /**< Incremental target accumulated by CH1 steps. */
+    float           incremental_angle_deg; /**< Fractional CH1 target, degrees. */
     uint8_t         roll_degree;           /**< CH8 wheel mapped to 0..180 degrees. */
     uint8_t         gripper_angle;         /**< CH4 spring axis mapped to 0..180 degrees. */
 } RcControlData_t;
@@ -140,6 +140,10 @@ typedef struct {
     int16_t           servo_velocity_steps;
     int16_t           servo_load;            /**< -1000..+1000. */
     uint8_t           servo_voltage_dv;      /**< 0.1 V units. */
+    int16_t           servo_voltage_mv;      /**< HX8 monitor voltage, mV. */
+    int16_t           servo_power_mw;        /**< HX8 monitor power, mW. */
+    int16_t           servo_temp_raw;        /**< HX8 thermistor ADC value. */
+    uint8_t           servo_hw_status;       /**< Raw HX8 BIT0..BIT7 status. */
     uint8_t           servo_temp_c;
     bool              servo_moving;
     AraStatus_t       servo_status;          /**< ARA_OK / ARA_BUSY / ARA_ERR_DISCONNECTED. */

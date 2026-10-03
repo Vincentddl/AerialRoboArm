@@ -208,10 +208,6 @@ static void update_ch1_rate_target(ModRcSemantic_Context_t *p_ctx,
     if (p_ctx->inc_target_q8 < min_q8) p_ctx->inc_target_q8 = min_q8;
     if (p_ctx->inc_target_q8 > max_q8) p_ctx->inc_target_q8 = max_q8;
 
-    p_ctx->inc_target_deg = clamp_ch1_target_deg(
-        (p_ctx->inc_target_q8 >= 0) ?
-            ((p_ctx->inc_target_q8 + 128L) / 256L) :
-            ((p_ctx->inc_target_q8 - 128L) / 256L));
 }
 
 /* =========================================================
@@ -231,7 +227,6 @@ AraStatus_t ModRcSemantic_Init(ModRcSemantic_Context_t *p_ctx,
     p_ctx->sb_pulse_active = false;
     p_ctx->se_last_active = map_2pos(initial_chs[MOD_RC_IDX_SE]);
 
-    p_ctx->inc_target_deg   = 0;
     p_ctx->inc_target_q8    = 0;
     p_ctx->inc_last_step_ms = 0U;
     p_ctx->ch4_right_active =
@@ -244,8 +239,7 @@ void ModRcSemantic_ReseedIncremental(ModRcSemantic_Context_t *p_ctx,
                                      int16_t current_deg)
 {
     if (p_ctx == NULL) return;
-    p_ctx->inc_target_deg   = clamp_ch1_target_deg(current_deg);
-    p_ctx->inc_target_q8    = (int32_t)p_ctx->inc_target_deg * 256L;
+    p_ctx->inc_target_q8    = (int32_t)clamp_ch1_target_deg(current_deg) * 256L;
     p_ctx->inc_last_step_ms = 0U;
 }
 
@@ -310,10 +304,9 @@ AraStatus_t ModRcSemantic_Process(ModRcSemantic_Context_t *p_ctx,
                            current_tick_ms);
 
     if (out_data->home_to_zero_pulse) {
-        p_ctx->inc_target_deg = 0;
         p_ctx->inc_target_q8 = 0;
     }
-    out_data->incremental_angle_deg = p_ctx->inc_target_deg;
+    out_data->incremental_angle_deg = (float)p_ctx->inc_target_q8 / 256.0f;
 
     /* ---------------- CH1 arm semantics with hysteresis ---------------- */
     out_data->arm_cmd = ARM_CMD_HOLD;

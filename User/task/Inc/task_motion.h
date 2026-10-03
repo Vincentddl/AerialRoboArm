@@ -40,9 +40,9 @@
 #define TASK_MOTION_ANGLE_MIN_DEG       ARA_MAIN_ARM_ANGLE_MIN_DEG /**< Forward mechanical limit. */
 #define TASK_MOTION_ANGLE_MAX_DEG       ARA_MAIN_ARM_ANGLE_MAX_DEG /**< Backward mechanical limit. */
 
-#define TASK_MOTION_DEFAULT_VELOCITY    (300.0f)/**< Safe MANUAL speed; keeps margin below 696 deg/s rated point. */
-#define TASK_MOTION_DEFAULT_T_ACC_MS    (120U)  /**< Smooth MANUAL acceleration to reduce gear and supply shock. */
-#define TASK_MOTION_DEFAULT_T_DEC_MS    (120U)  /**< Smooth MANUAL braking to reduce overshoot at physical limits. */
+#define TASK_MOTION_DEFAULT_VELOCITY    (220.0f)/**< Manual servo speed above the 150 deg/s target rate. */
+#define TASK_MOTION_DEFAULT_T_ACC_MS    (100U)  /**< Manual acceleration ramp. */
+#define TASK_MOTION_DEFAULT_T_DEC_MS    (100U)  /**< Manual braking ramp. */
 #define TASK_MOTION_DEFAULT_POWER_MW    (0U)    /**< 0 = servo auto-calc. */
 #define TASK_MOTION_AUTO_VELOCITY       (80.0f) /**< Conservative first-stage vision AUTO speed. */
 #define TASK_MOTION_AUTO_VELOCITY_MIN   (20.0f) /**< Lowest accepted non-zero HC13 AUTO speed. */
@@ -52,6 +52,7 @@
 #define TASK_MOTION_ONLINE_GRACE_MS     (3000U) /**< Ignore brief telemetry dropouts. */
 #define TASK_MOTION_FEEDBACK_PERIOD_MS  (100U)  /**< ServoMonitor polling period. */
 #define TASK_MOTION_COMMAND_REFRESH_MS  (200U)  /**< Re-send held target because move commands have no ACK by default. */
+#define TASK_MOTION_TARGET_INTERVAL_MS  (40U)   /**< Avoid restarting the servo trajectory every 20 ms. */
 #define TASK_MOTION_STOP_REFRESH_MS     (200U)  /**< Repeat idempotent Stop while torque is disabled. */
 
 /* ============================================================================
