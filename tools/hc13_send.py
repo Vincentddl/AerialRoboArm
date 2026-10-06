@@ -15,7 +15,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--port", default="COM5", help="PC-side HC-13 serial port")
     parser.add_argument("--baud", type=int, default=230400)
-    parser.add_argument("--angle", type=int, required=True, help="servo g angle, -100..100 deg")
+    parser.add_argument("--angle", type=int, required=True, help="servo g angle, -90..85 deg")
     parser.add_argument("--speed", type=int, default=0, help="0 uses the MCU AUTO default")
     parser.add_argument("--confidence", type=int, default=90, help="0..100")
     parser.add_argument("--repeat", type=int, default=10, help="number of packets to send")
@@ -31,8 +31,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
-    if not -100 <= args.angle <= 100:
-        raise SystemExit("ERROR: --angle must stay within the MCU safety limit -100..100")
+    if not -90 <= args.angle <= 85:
+        raise SystemExit("ERROR: --angle must stay within the MCU safety limit -90..85")
     if not 0 <= args.speed <= 65535:
         raise SystemExit("ERROR: --speed must be 0..65535")
     if not 0 <= args.confidence <= 100:

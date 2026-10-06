@@ -99,7 +99,7 @@ void DrvHC13_Flush(void);
  *
  * angle_deg is an integer absolute HX8 g command produced by the empirical
  * camera/servo calibration; it is not the camera optical offset. Angle is
- * clamped to the mechanism range [-100,+100]. Speed is requested deg/s, where
+ * clamped to the mechanism range [-90,+85]. Speed is requested deg/s, where
  * zero selects the safe AUTO default; the execution layer applies an additional
  * safety cap. Confidence is clamped to [0,100]. A sample remains valid for
  * HC13_VISION_TTL_MS after its timestamp.

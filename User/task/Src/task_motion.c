@@ -53,7 +53,7 @@ static float map_angle_to_fsus(float deg)
 {
     /* Final safety boundary shared by every command source (RC, RTT and
      * HC-13 vision). The protocol supports +/-180 deg, but the mechanism is
-     * deliberately restricted to -100 deg forward .. +100 deg backward. */
+     * deliberately restricted to -90 deg forward .. +85 deg backward. */
     if (deg > (float)TASK_MOTION_ANGLE_MAX_DEG) return (float)TASK_MOTION_ANGLE_MAX_DEG;
     if (deg < (float)TASK_MOTION_ANGLE_MIN_DEG) return (float)TASK_MOTION_ANGLE_MIN_DEG;
     return deg;

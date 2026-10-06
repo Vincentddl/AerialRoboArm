@@ -47,8 +47,8 @@ typedef enum {
  * These limits apply to RC manual, RTT force commands and HC-13 vision AUTO.
  * The HX8 protocol itself supports a wider range; this narrower envelope
  * protects the actual AerialRoboArm mechanism. */
-#define ARA_MAIN_ARM_ANGLE_MIN_DEG   (-100)
-#define ARA_MAIN_ARM_ANGLE_MAX_DEG   (100)
+#define ARA_MAIN_ARM_ANGLE_MIN_DEG   (-90)
+#define ARA_MAIN_ARM_ANGLE_MAX_DEG   (85)
 
 /* --- 4. Common Callback Type --- */
 typedef void (*AraCallback_t)(void);

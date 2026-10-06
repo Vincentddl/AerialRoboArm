@@ -61,7 +61,7 @@
 
 typedef struct {
     bool     torque_on;              /**< false = send Stop(unlock). */
-    float    target_angle_deg;       /**< Commanded angle, clamped to -100..+100. */
+    float    target_angle_deg;       /**< Commanded angle, clamped to -90..+85. */
     float    velocity_deg_per_s;     /**< Traverse speed. */
     uint16_t t_acc_ms;               /**< Accel time, >= 20. */
     uint16_t t_dec_ms;               /**< Decel time, >= 20. */
