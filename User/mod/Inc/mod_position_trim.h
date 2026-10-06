@@ -4,11 +4,22 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#define POSITION_TRIM_SETTLE_MS       (600U)
-#define POSITION_TRIM_INTERVAL_MS     (200U)
+#ifndef POSITION_TRIM_SETTLE_MS
+#define POSITION_TRIM_SETTLE_MS       (300U)
+#endif
+#ifndef POSITION_TRIM_INTERVAL_MS
+#define POSITION_TRIM_INTERVAL_MS     (100U)
+#endif
+#ifndef POSITION_TRIM_QUIET_SAMPLES
+#define POSITION_TRIM_QUIET_SAMPLES   (2U)
+#endif
 #define POSITION_TRIM_FEEDBACK_MAX_MS (140U)
 #define POSITION_TRIM_DEADBAND_DEG    (0.30f)
-#define POSITION_TRIM_STEP_DEG        (0.10f)
+#define POSITION_TRIM_MIN_STEP_DEG    (0.10f)
+#ifndef POSITION_TRIM_MAX_STEP_DEG
+#define POSITION_TRIM_MAX_STEP_DEG    (0.20f)
+#endif
+#define POSITION_TRIM_ERROR_GAIN      (0.35f)
 #define POSITION_TRIM_MAX_DEG         (1.50f)
 #define POSITION_TRIM_CAPTURE_DEG     (3.00f)
 

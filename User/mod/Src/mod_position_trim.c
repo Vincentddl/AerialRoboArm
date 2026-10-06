@@ -36,8 +36,12 @@ float ModPositionTrim_Update(PositionTrim_t *state, float requested_deg,
     if (state->have_sample && feedback_ms == state->sample_ms) {
         return clamp(goal + state->trim_deg, minimum_deg, maximum_deg);
     }
-    if (state->have_sample && absolute(position_deg - state->previous_position_deg) <= 0.15f) {
-        if (state->quiet_samples < 3U) state->quiet_samples++;
+    /* Once fine correction has begun, allow the small motion caused by our
+     * own bounded step. This does not delay the normal target-following path. */
+    const float quiet_delta = absolute(state->trim_deg) > 0.01f
+                                  ? POSITION_TRIM_MAX_STEP_DEG + 0.05f : 0.15f;
+    if (state->have_sample && absolute(position_deg - state->previous_position_deg) <= quiet_delta) {
+        if (state->quiet_samples < POSITION_TRIM_QUIET_SAMPLES) state->quiet_samples++;
     } else {
         state->quiet_samples = 0U;
     }
@@ -52,13 +56,15 @@ float ModPositionTrim_Update(PositionTrim_t *state, float requested_deg,
         state->blocked = true;
         state->trim_deg = 0.0f;
     }
-    if (state->blocked || state->quiet_samples < 3U ||
+    if (state->blocked || state->quiet_samples < POSITION_TRIM_QUIET_SAMPLES ||
         (uint32_t)(now_ms - state->goal_changed_ms) < POSITION_TRIM_SETTLE_MS ||
         (uint32_t)(now_ms - state->adjusted_ms) < POSITION_TRIM_INTERVAL_MS ||
         error_abs <= POSITION_TRIM_DEADBAND_DEG || error_abs > POSITION_TRIM_CAPTURE_DEG) {
         return clamp(goal + state->trim_deg, minimum_deg, maximum_deg);
     }
-    const float proposed = state->trim_deg + (error > 0.0f ? POSITION_TRIM_STEP_DEG : -POSITION_TRIM_STEP_DEG);
+    const float step = clamp(POSITION_TRIM_ERROR_GAIN * error_abs,
+                             POSITION_TRIM_MIN_STEP_DEG, POSITION_TRIM_MAX_STEP_DEG);
+    const float proposed = state->trim_deg + (error > 0.0f ? step : -step);
     const float bounded = clamp(proposed, -POSITION_TRIM_MAX_DEG, POSITION_TRIM_MAX_DEG);
     const float sent = clamp(goal + bounded, minimum_deg, maximum_deg);
     /* Anti-windup: retain only correction that can actually fit the hard limits. */

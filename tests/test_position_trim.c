@@ -9,15 +9,18 @@ static void test_bias(float bias, uint32_t start)
     PositionTrim_t state;
     ModPositionTrim_Reset(&state);
     float sent = -50.0f;
+    uint32_t settled_ms = UINT32_MAX;
     for (uint32_t dt = 0; dt < 10000; dt += 100) {
         uint32_t now = start + dt;
         sent = ModPositionTrim_Update(&state, -50.0f, sent + bias, now,
                                       true, true, now, -90.0f, 85.0f);
         assert(sent >= -90.0f && sent <= 85.0f);
         assert(fabsf(state.trim_deg) <= POSITION_TRIM_MAX_DEG + 0.001f);
+        if (settled_ms == UINT32_MAX && fabsf(sent + bias + 50.f) <= .31f) settled_ms = dt;
     }
     assert(fabsf(sent + bias + 50.0f) <= 0.31f);
-    printf("bias=%+.1f: final residual %.3f deg, trim %.3f deg\n", bias, sent + bias + 50.0f, state.trim_deg);
+    printf("bias=%+.1f: final residual %.3f deg, trim %.3f deg, settled_ms=%u\n",
+           bias, sent + bias + 50.0f, state.trim_deg, (unsigned)settled_ms);
 }
 
 static PositionTrim_t trimmed_state(void)
@@ -102,16 +105,23 @@ static void test_delayed_servo(void)
     ModPositionTrim_Reset(&state);
     float position = -48.8f;
     float sent = -50.f;
+    float maximum_overshoot = 0.f;
+    uint32_t settled_ms = UINT32_MAX;
     for (uint32_t now = 0; now < 20000; now += 100) {
         /* Slower first-order internal position loop and +/-0.05 deg noise. */
-        position += 0.15f * (sent + 1.2f - position);
+        position += 0.15f * (roundf(sent * 10.f) / 10.f + 1.2f - position);
         float measured = position + (((now / 100) % 2) ? .05f : -.05f);
+        measured = roundf(measured * 10.f) / 10.f;
         sent = ModPositionTrim_Update(&state, -50, measured, now,
                                       true, true, now, -90, 85);
         assert(!state.blocked && fabsf(state.trim_deg) <= 1.501f);
+        if (-position - 50.f > maximum_overshoot) maximum_overshoot = -position - 50.f;
+        if (settled_ms == UINT32_MAX && fabsf(position + 50.f) <= .31f) settled_ms = now;
     }
     assert(fabsf(position + 50.f) <= .4f);
-    printf("delayed/noisy servo: residual %.3f deg\n", position + 50.f);
+    assert(maximum_overshoot <= .4f);
+    printf("delayed/noisy servo: residual %.3f deg, settled_ms=%u, peak_overshoot=%.3f\n",
+           position + 50.f, (unsigned)settled_ms, maximum_overshoot);
 }
 
 int main(void)
