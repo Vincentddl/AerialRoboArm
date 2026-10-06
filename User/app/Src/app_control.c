@@ -262,6 +262,13 @@ static void publish_hub(uint32_t now_ms, uint32_t loop_count)
     snap.servo_feedback_age_ms = s_mstate.feedback_age_ms;
     snap.servo_encoder_jump_count = s_mstate.encoder_jump_count;
     snap.servo_stalled = s_mstate.is_stalled;
+    const float bus_deci = s_mstate.bus_target_deg * 10.0f;
+    const float trim_deci = s_mstate.position_trim_deg * 10.0f;
+    snap.servo_bus_target_ddeg = (int16_t)(bus_deci + (bus_deci >= 0.0f ? 0.5f : -0.5f));
+    snap.servo_position_trim_ddeg = (int16_t)(trim_deci + (trim_deci >= 0.0f ? 0.5f : -0.5f));
+    snap.servo_bus_target_valid = s_mstate.bus_target_valid;
+    snap.servo_position_trim_limited = s_mstate.position_trim_limited;
+    snap.servo_position_trim_blocked = s_mstate.position_trim_blocked;
 
     snap.rc_link_up      = s_rc.is_link_up;
     snap.vision_link_up  = s_vis.target_present;

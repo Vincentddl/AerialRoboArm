@@ -152,6 +152,11 @@ typedef struct {
     uint32_t          servo_feedback_age_ms;   /**< Age of latest real HX8 monitor frame. */
     uint32_t          servo_encoder_jump_count;/**< Suspected impossible encoder discontinuities. */
     bool              servo_stalled;           /**< HX8 monitor BIT2 stall state. */
+    int16_t           servo_bus_target_ddeg;   /**< Last successful command, 0.1 degree. */
+    int16_t           servo_position_trim_ddeg;/**< Settled-position trim, 0.1 degree. */
+    bool              servo_bus_target_valid;
+    bool              servo_position_trim_limited;
+    bool              servo_position_trim_blocked;
 
     /* --- Link health --- */
     bool              rc_link_up;

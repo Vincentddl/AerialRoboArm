@@ -62,10 +62,11 @@ static void console_print_help(void)
     BSP_UART_Printf(
         "[DBG] keys:\r\n"
         "  v=mock-vision 120deg/3s   c=clear-vision    f=clear-fault\r\n"
-        "  e=force ON (lock 0deg)    k=force OFF\r\n"
+        "  e=force ON (hold current angle)    k=force OFF\r\n"
         "  1=goto 0  2=goto -70  3=goto +70\r\n"
         "  +=+10deg  -=-10deg\r\n"
         "  g <deg>=force HX8 to arbitrary angle, eg 'g 47<enter>'\r\n"
+        "  z=toggle settled position trim (for baseline comparison)\r\n"
         "  p <ch> <deg>=lock PTK (ch 0=grip,1=roll; deg 0..180; -1=release)\r\n"
         "  P=release both PTK channels back to RC\r\n"
         "  r=raw channel dump on/off\r\n"
@@ -323,6 +324,12 @@ static void console_poll(uint32_t tick_ms)
         case 'k':
             console_send_force(s_console_force_angle, false);
             break;
+        case 'z': {
+            bool enabled = !TaskMotion_IsPositionTrimEnabled();
+            TaskMotion_SetPositionTrimEnabled(enabled);
+            BSP_UART_Printf("[DBG] position trim %s\r\n", enabled ? "ON" : "OFF");
+            break;
+        }
         case '1':
             console_send_force(0, true);
             break;
@@ -532,6 +539,12 @@ static void periodic_snapshot(void)
                     (int)s.servo_power_mw,
                     (int)s.servo_temp_raw,
                     (unsigned)s.servo_hw_status);
+    BSP_UART_Printf("[POS] sent_ddeg=%d trim_ddeg=%d valid=%u cap=%u block=%u enabled=%u\r\n",
+                    (int)s.servo_bus_target_ddeg, (int)s.servo_position_trim_ddeg,
+                    s.servo_bus_target_valid ? 1U : 0U,
+                    s.servo_position_trim_limited ? 1U : 0U,
+                    s.servo_position_trim_blocked ? 1U : 0U,
+                    TaskMotion_IsPositionTrimEnabled() ? 1U : 0U);
 
     if (s_raw_dump_active) {
         raw_channel_dump();

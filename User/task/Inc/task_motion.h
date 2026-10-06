@@ -51,7 +51,10 @@
 #define TASK_MOTION_AUTO_T_DEC_MS       (200U)  /**< Smooth AUTO deceleration for bench validation. */
 #define TASK_MOTION_ONLINE_GRACE_MS     (3000U) /**< Ignore brief telemetry dropouts. */
 #define TASK_MOTION_FEEDBACK_PERIOD_MS  (100U)  /**< ServoMonitor polling period. */
-#define TASK_MOTION_COMMAND_REFRESH_MS  (200U)  /**< Re-send held target because move commands have no ACK by default. */
+#define TASK_MOTION_COMMAND_REFRESH_MS  (1000U) /**< Lower-rate held-target retry; fresh position queries still run at 10 Hz. */
+#ifndef TASK_MOTION_POSITION_TRIM_ENABLE
+#define TASK_MOTION_POSITION_TRIM_ENABLE (1)   /**< Bounded correction only after goal and encoder settle. */
+#endif
 #define TASK_MOTION_TARGET_INTERVAL_MS  (40U)   /**< Avoid restarting the servo trajectory every 20 ms. */
 #define TASK_MOTION_STOP_REFRESH_MS     (200U)  /**< Repeat idempotent Stop while torque is disabled. */
 
@@ -87,6 +90,11 @@ typedef struct {
     bool                encoder_jump_suspected; /**< New feedback exceeded physical plausibility. */
     uint32_t            encoder_jump_count;     /**< Persistent suspected-jump counter. */
     float               encoder_delta_deg;     /**< Delta between the latest two fresh frames. */
+    float               bus_target_deg;        /**< Last successfully sent target, including trim. */
+    float               position_trim_deg;     /**< Controller correction request, maximum +/-1.5 deg. */
+    bool                bus_target_valid;
+    bool                position_trim_limited;
+    bool                position_trim_blocked;
 
     /* --- Link health --- */
     bool                servo_online;
@@ -97,6 +105,8 @@ typedef struct {
  * ============================================================================= */
 
 void TaskMotion_Init(void);
+void TaskMotion_SetPositionTrimEnabled(bool enabled);
+bool TaskMotion_IsPositionTrimEnabled(void);
 
 void TaskMotion_Update(const MotionCmd_t *cmd,
                        uint32_t           tick_ms,

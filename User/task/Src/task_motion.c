@@ -7,6 +7,7 @@
 #include "bsp_uart.h"
 #include "stm32f1xx_hal.h"
 #include "cmsis_os2.h"
+#include "mod_position_trim.h"
 
 #include <string.h>
 
@@ -23,6 +24,8 @@ static uint32_t s_last_feedback_ok_ms = 0U;
 static uint32_t s_last_feedback_poll_ms = 0U;
 static bool     s_last_feedback_valid = false;
 static FsusFeedback_t s_last_feedback;
+static PositionTrim_t s_position_trim;
+static volatile bool s_position_trim_enabled = (TASK_MOTION_POSITION_TRIM_ENABLE != 0);
 
 /* Encoder continuity diagnostics use only newly received monitor frames.
  * Cached feedback must never be counted as a new physical observation. */
@@ -287,6 +290,8 @@ void TaskMotion_Init(void)
     s_encoder_prev_valid = false;
     memset(&s_encoder_prev_feedback, 0, sizeof(s_encoder_prev_feedback));
     s_encoder_jump_count = 0U;
+    ModPositionTrim_Reset(&s_position_trim);
+    s_position_trim_enabled = (TASK_MOTION_POSITION_TRIM_ENABLE != 0);
 
 #if TASK_MOTION_USE_MOCK
     s_mock_pos_deg       = 0.0f;
@@ -294,6 +299,17 @@ void TaskMotion_Init(void)
     s_mock_torque_on     = false;
     s_mock_last_tick_ms  = 0U;
 #endif
+}
+
+void TaskMotion_SetPositionTrimEnabled(bool enabled)
+{
+    /* Debug task changes only an atomic flag. Control task owns trim state. */
+    s_position_trim_enabled = enabled && (TASK_MOTION_POSITION_TRIM_ENABLE != 0);
+}
+
+bool TaskMotion_IsPositionTrimEnabled(void)
+{
+    return s_position_trim_enabled;
 }
 
 #if TASK_MOTION_USE_MOCK
@@ -394,7 +410,20 @@ void TaskMotion_Update(const MotionCmd_t *cmd,
     return;
 #endif
 
-    float target_deg = map_angle_to_fsus(cmd->target_angle_deg);
+    const float requested_deg = map_angle_to_fsus(cmd->target_angle_deg);
+    float target_deg = requested_deg;
+    const float previous_trim_deg = s_position_trim.trim_deg;
+#if TASK_MOTION_POSITION_TRIM_ENABLE
+    const bool trim_feedback_healthy = s_position_trim_enabled && s_last_feedback_valid &&
+        ((s_last_feedback.status & 0xFEU) == 0U) &&
+        (s_last_feedback.voltage_mv >= 9000U) &&
+        (s_last_feedback.voltage_mv <= 12600U);
+    target_deg = ModPositionTrim_Update(&s_position_trim, requested_deg,
+                    s_last_feedback.angle_deg, s_last_feedback_ok_ms,
+                    trim_feedback_healthy, cmd->torque_on, tick_ms,
+                    (float)TASK_MOTION_ANGLE_MIN_DEG, (float)TASK_MOTION_ANGLE_MAX_DEG);
+#endif
+    const bool position_trim_changed = abs_float(previous_trim_deg - s_position_trim.trim_deg) > 0.05f;
 
     /* Bring-up probe: first prove ID/baud/electrical reachability, then read
      * the absolute encoder before torque is enabled. The control FSM uses
@@ -461,7 +490,8 @@ void TaskMotion_Update(const MotionCmd_t *cmd,
          * The servo keeps running its internal closed loop after one command. */
         float diff = target_deg - s_last_target_deg;
         if (diff < 0.0f) diff = -diff;
-        bool changed = (diff > 0.2f) || cmd->force_update;
+        const float threshold = (s_position_trim.trim_deg != 0.0f || position_trim_changed) ? 0.05f : 0.2f;
+        bool changed = (diff > threshold) || cmd->force_update;
         bool target_interval_due = (s_last_command_tx_ms == 0U) ||
             ((uint32_t)(tick_ms - s_last_command_tx_ms) >=
              TASK_MOTION_TARGET_INTERVAL_MS);
@@ -504,6 +534,11 @@ void TaskMotion_Update(const MotionCmd_t *cmd,
      * actually happened inside the servo controller. Polling at the full
      * control-loop rate can overload a marginal bring-up bus, so telemetry is
      * intentionally decimated and cached between successful monitor frames. */
+    state->bus_target_valid = s_torque_active;
+    state->bus_target_deg = s_torque_active ? s_last_target_deg : requested_deg;
+    state->position_trim_deg = s_position_trim.trim_deg;
+    state->position_trim_limited = s_position_trim.limited;
+    state->position_trim_blocked = s_position_trim.blocked;
     bool should_poll = (!s_last_feedback_valid) ||
                        ((uint32_t)(tick_ms - s_last_feedback_poll_ms) >= TASK_MOTION_FEEDBACK_PERIOD_MS);
 

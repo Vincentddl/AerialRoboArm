@@ -177,7 +177,8 @@ uint16_t DrvFsus_EncodeSetAngleByVelocity(uint8_t *tx_buf,
     content[off++] = servo_id;
 
     /* Convert human-friendly units into the integer units used on the wire. */
-    fsus_pack_s16_le(&content[off], (int16_t)(angle_deg * 10.0f));
+    const float angle_deci = angle_deg * 10.0f;
+    fsus_pack_s16_le(&content[off], (int16_t)(angle_deci + (angle_deci >= 0.0f ? 0.5f : -0.5f)));
     off += 2U;
     fsus_pack_u16_le(&content[off], (uint16_t)(velocity_deg_per_s * 10.0f));
     off += 2U;
