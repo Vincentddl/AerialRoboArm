@@ -35,6 +35,9 @@ void TaskArbiter_Decide(const ArbiterInput_t *in, ArbiterOutput_t *out)
     out->gripper_cmd      = GRIPPER_CMD_STOP;
     out->roll_degree      = 90U;
     out->gripper_angle    = 90U;
+    out->gripper_override_enabled = false;
+    out->vision_stable_frames = 0U;
+    out->vision_frame_id = 0U;
     out->led_pattern      = LED_PATTERN_IDLE_SLOW_BLINK;
     out->reason_code      = ARB_REASON_IDLE_DEFAULT;
     out->fault_latched_next   = in->fault_latched;
@@ -159,14 +162,16 @@ void TaskArbiter_Decide(const ArbiterInput_t *in, ArbiterOutput_t *out)
             ((uint32_t)(in->tick_ms - vs->last_update_tick_ms) < vision_stale_ms);
 
         if (vision_fresh) {
+            out->vision_stable_frames = vs->stable_frames;
+            out->vision_frame_id = vs->frame_id;
             out->mode             = ARA_MODE_AUTO;
             out->torque_request   = true;
             out->target_angle_deg = vs->target_angle_deg;
             out->target_speed     = (vs->target_speed != 0U) ? vs->target_speed : 0U;
             out->target_acc       = 50U;
-            out->gripper_cmd      = GRIPPER_CMD_STOP;
+            out->gripper_cmd      = rc->gripper_cmd;
             out->roll_degree      = 90U;
-            out->gripper_angle    = ARBITER_AUTO_GRIPPER_ANGLE_DEG;
+            out->gripper_angle    = rc->gripper_angle;
             out->led_pattern      = LED_PATTERN_AUTO_SOLID;
             out->reason_code      = ARB_REASON_AUTO_VISION_FRESH;
             return;
@@ -178,9 +183,9 @@ void TaskArbiter_Decide(const ArbiterInput_t *in, ArbiterOutput_t *out)
         out->target_angle_deg = ARBITER_TARGET_ANGLE_HOLD;
         out->target_speed     = 0U;
         out->target_acc       = 50U;
-        out->gripper_cmd      = GRIPPER_CMD_STOP;
+        out->gripper_cmd      = rc->gripper_cmd;
         out->roll_degree      = 90U;
-        out->gripper_angle    = ARBITER_AUTO_GRIPPER_ANGLE_DEG;
+        out->gripper_angle    = rc->gripper_angle;
         out->led_pattern      = LED_PATTERN_AUTO_SOLID;
         out->reason_code      = ARB_REASON_AUTO_VISION_STALE;
         return;

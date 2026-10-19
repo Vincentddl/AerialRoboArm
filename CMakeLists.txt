@@ -15,6 +15,14 @@ set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
 
 # project settings
 project(FOC_DEMO2 C CXX ASM)
+option(SERVO1_ONLY_TEST "Build isolated PA0 PWM servo test without HX8 control" OFF)
+option(AUTO_GRIP_THREE_FRAME "AUTO opens gripper then closes after three stable observations" OFF)
+if(AUTO_GRIP_THREE_FRAME)
+    add_compile_definitions(TASK_MANIP_AUTO_GRIP_THREE_FRAME=1)
+endif()
+if(SERVO1_ONLY_TEST)
+    add_compile_definitions(APP_CONTROL_SERVO1_ONLY=1 BSP_PWM_ENABLE_SERVO_2=0)
+endif()
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_C_STANDARD 11)
 

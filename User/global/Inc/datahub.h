@@ -105,6 +105,8 @@ typedef struct {
     int16_t  target_angle_deg;        /**< Commanded joint angle in degrees. */
     uint16_t target_speed;            /**< Desired traversal speed, deg/s; 0 = safe AUTO default. */
     uint8_t  confidence;              /**< 0..100; zero disables AUTO action. */
+    uint8_t  stable_frames;           /**< PC camera stability count, capped at 3. */
+    uint32_t frame_id;                /**< Accepted HC13 frame counter, not task ticks. */
     uint32_t last_update_tick_ms;     /**< When the latest vision event arrived. */
 } VisionIntent_t;
 
@@ -133,6 +135,9 @@ typedef struct {
     bool              servo_torque_request;
     uint8_t           end_roll_deg;          /**< Commanded PA1 roll, 0..180. */
     uint8_t           end_gripper_deg;       /**< Commanded PA0 gripper, 0..180. */
+    uint8_t           auto_pick_stage;       /**< 0=inactive, 2=track/open, 3=closed/track, 4=hold/open. */
+    uint8_t           auto_grip_stable_frames;
+    uint8_t           home_zero_stage; /**< 0=wait, 1=moving, 2=done, 3=failed. */
 
     /* --- Servo feedback side --- */
     int16_t           servo_position_steps;

@@ -80,6 +80,10 @@ typedef enum {
      */
     DBG_REQ_FORCE_PTK_ANGLE,
 
+    /** Toggle runtime SERVO1-only debug; no HX8/vision control while active. */
+    DBG_REQ_TOGGLE_SERVO1_DEBUG,
+    DBG_REQ_SELECT_HX8_DEBUG,
+
     /** Last enum sentinel for bounds checking. */
     DBG_REQ_TYPE_COUNT
 } DebugReqType_t;

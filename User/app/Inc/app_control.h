@@ -26,6 +26,9 @@
 
 #include "ara_def.h"
 #include "ara_prio.h"
+#ifndef APP_CONTROL_SERVO1_ONLY
+#define APP_CONTROL_SERVO1_ONLY (0)
+#endif
 
 /* ============================================================================
  * Lifecycle
@@ -36,6 +39,9 @@
  *        osKernelInitialize().
  */
 void App_Control_InitDeps(void);
+bool App_Control_IsServo1Debug(void);
+uint8_t App_Control_GetDebugTarget(void); /* 0=normal, 1=SERVO1, 2=HX8 */
+bool App_Control_IsVofaManual(void);
 
 /**
  * @brief Create the ControlTask thread. Call from USER CODE BEGIN RTOS_THREADS

@@ -44,7 +44,9 @@ typedef enum {
     ARB_REASON_SERVO_OFFLINE       = 7,
     ARB_REASON_FAULT_PENDING_RESET = 8,
     ARB_REASON_HOME_ZERO           = 9,
-    ARB_REASON_SERVO_STALL         = 10
+    ARB_REASON_SERVO_STALL         = 10,
+    ARB_REASON_SERVO1_DEBUG        = 11,
+    ARB_REASON_MANUAL_VOFA         = 12
 } ArbiterReason_t;
 
 /* ============================================================================
@@ -81,6 +83,9 @@ typedef struct {
     AraGripperCmd_t   gripper_cmd;
     uint8_t           roll_degree;
     uint8_t           gripper_angle;
+    bool              gripper_override_enabled; /**< Explicit RTT PTK override. */
+    uint8_t           vision_stable_frames;
+    uint32_t          vision_frame_id;
     AraLedPattern_t   led_pattern;
     ArbiterReason_t   reason_code;
     /** Latch state caller should persist for next tick. Mirrors the

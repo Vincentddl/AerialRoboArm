@@ -22,6 +22,7 @@
  * @brief Initialise the vision runnable (resets Mock state).
  */
 void TaskVision_Init(void);
+void TaskVision_DiscardQueuedInput(void);
 
 /**
  * @brief Produce the current vision intent for this tick.

@@ -44,6 +44,7 @@ typedef struct {
     int16_t  target_angle_deg;
     uint16_t target_speed;
     uint8_t  confidence;
+    uint8_t  stable_frames; /**< Optional fifth V field, 0..3; legacy frames use 0. */
     uint32_t timestamp_ms;
 } HC13VisionSample_t;
 
@@ -86,12 +87,14 @@ uint16_t DrvHC13_Recv(uint8_t *data, uint16_t len);
  * @brief Flush raw RX bytes and partial line parser state.
  */
 void DrvHC13_Flush(void);
+void DrvHC13_InvalidateVision(void);
 
 /**
  * @brief Drain RX bytes, parse PC vision text frames, and return freshest sample.
  *
  * Supported PC-side transparent text frames:
  *   V,<angle_deg>,<speed>,<confidence>\n
+ *   V,<angle_deg>,<speed>,<confidence>,<stable_frames>\n
  *   VISION,<angle_deg>,<speed>,<confidence>\n
  *
  * Example:

@@ -86,6 +86,7 @@ static bool parse_vision_line(char *line, uint32_t now_ms)
     int32_t angle = 0;
     int32_t speed = 0;
     int32_t conf = 100;
+    int32_t stable = 0;
 
     if (!parse_i32_token(&cursor, &angle)) {
         return false;
@@ -97,6 +98,8 @@ static bool parse_vision_line(char *line, uint32_t now_ms)
         conf = 100;
     }
 
+    (void)parse_i32_token(&cursor, &stable);
+    s_latest.stable_frames = (stable >= 0 && stable <= 3) ? (uint8_t)stable : 0U;
     s_latest.target_present    = true;
     /* HC-13 carries absolute HX8 g commands. Clamp at reception as an early
      * guard; TaskMotion applies the same mechanical limit again at output. */
@@ -197,6 +200,11 @@ void DrvHC13_Flush(void)
 {
     s_rx_tail = s_rx_head;
     s_line_len = 0U;
+}
+
+void DrvHC13_InvalidateVision(void)
+{
+    memset(&s_latest, 0, sizeof(s_latest));
 }
 
 bool DrvHC13_PollVision(uint32_t now_ms, HC13VisionSample_t *out)

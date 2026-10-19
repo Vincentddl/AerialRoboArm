@@ -70,6 +70,17 @@ void TaskVision_MockClear(void)
     taskEXIT_CRITICAL();
 }
 
+void TaskVision_DiscardQueuedInput(void)
+{
+    TaskVision_MockClear();
+#if TASK_VISION_USE_HC13
+    taskENTER_CRITICAL();
+    DrvHC13_Flush();
+    DrvHC13_InvalidateVision();
+    taskEXIT_CRITICAL();
+#endif
+}
+
 void TaskVision_Update(uint32_t tick_ms, VisionIntent_t *out)
 {
     if (out == NULL) {
@@ -101,11 +112,15 @@ void TaskVision_Update(uint32_t tick_ms, VisionIntent_t *out)
         out->target_angle_deg     = hc13.target_angle_deg;
         out->target_speed         = hc13.target_speed;
         out->confidence           = hc13.confidence;
+        out->stable_frames        = hc13.stable_frames;
+        out->frame_id             = frame_count;
         out->last_update_tick_ms  = hc13.timestamp_ms;
         return;
     }
 #endif
 
+    out->stable_frames = 0U;
+    out->frame_id = 0U; /* Mock / legacy targets cannot trigger an automatic grip. */
     bool     active    = false;
     int16_t  angle     = 0;
     uint32_t injected  = 0U;

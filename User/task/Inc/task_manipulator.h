@@ -20,6 +20,14 @@
 #include "task_arbiter.h"
 #include "task_motion.h"
 
+#ifndef TASK_MANIP_AUTO_GRIP_THREE_FRAME
+#define TASK_MANIP_AUTO_GRIP_THREE_FRAME 0
+#endif
+
+#define TASK_MANIP_AUTO_OPEN_DEG          (ARBITER_AUTO_GRIPPER_ANGLE_DEG)
+#define TASK_MANIP_AUTO_CLOSE_DEG         (90U)
+#define TASK_MANIP_AUTO_FEEDBACK_MAX_MS   (140U)
+
 /* ============================================================================
  * State enum
  * ============================================================================= */
@@ -29,7 +37,7 @@ typedef enum {
     MANIP_STATE_IDLE,            /**< Safe idle, torque off. */
     MANIP_STATE_MANUAL,          /**< RC direct control. */
     MANIP_STATE_AUTO_GO,         /**< AUTO: traversing to vision target. */
-    MANIP_STATE_AUTO_HOLD,       /**< AUTO: target reached, holding. */
+    MANIP_STATE_AUTO_HOLD,       /**< AUTO: near target or no fresh target; grip open. */
     MANIP_STATE_ERROR_SAFE       /**< Latched fault / E-Stop. */
 } ManipulatorState_t;
 
@@ -38,6 +46,13 @@ typedef struct {
     uint32_t           state_enter_ms;
     float              last_target_angle_deg;
     ModActuator_Context_t actuator;
+    bool               auto_active;
+    bool               default_target_on_auto_entry;
+    bool               auto_grip_closed;
+    bool               auto_manual_grip_engaged;
+    uint8_t            grip_stable_frames;
+    uint32_t           last_vision_frame_id;
+    uint8_t            gripper_command_deg;
 } TaskManipulator_Context_t;
 
 /* ============================================================================
@@ -52,6 +67,8 @@ void TaskManipulator_Init(void);
  *        cannot fall back to the historical 0 degree initializer.
  */
 void TaskManipulator_SeedCurrentAngle(float current_angle_deg);
+/** Explicit default command, distinct from a measured encoder hold. */
+void TaskManipulator_SeedDefaultPosition(void);
 
 /**
  * @brief Run one 50 Hz manipulator step.
@@ -69,5 +86,13 @@ void TaskManipulator_Update(const ArbiterOutput_t *arb,
  * @brief Read the current FSM state (for telemetry / DataHub publishing).
  */
 ManipulatorState_t TaskManipulator_GetState(void);
+uint8_t TaskManipulator_GetGripperAngle(void);
+/** 0=inactive, 2=tracking/open, 3=closed and tracking, 4=holding/open. */
+uint8_t TaskManipulator_GetAutoStage(void);
+uint8_t TaskManipulator_GetGripStableFrames(void);
+/** Isolated PWM path; never touches roll or HX8. */
+bool TaskManipulator_DriveServo1Only(uint8_t degree);
+/** Cancel a pick when RTT force control interrupts normal arbitration. */
+void TaskManipulator_CancelAutoCycle(void);
 
 #endif /* TASK_MANIPULATOR_H */

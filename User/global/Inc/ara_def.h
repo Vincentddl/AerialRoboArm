@@ -49,6 +49,7 @@ typedef enum {
  * protects the actual AerialRoboArm mechanism. */
 #define ARA_MAIN_ARM_ANGLE_MIN_DEG   (-90)
 #define ARA_MAIN_ARM_ANGLE_MAX_DEG   (85)
+#define ARA_MAIN_ARM_DEFAULT_ANGLE_DEG (0)
 
 /* --- 4. Common Callback Type --- */
 typedef void (*AraCallback_t)(void);
