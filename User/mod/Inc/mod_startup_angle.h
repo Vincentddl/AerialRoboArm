@@ -18,4 +18,8 @@ void ModStartupAngle_Reset(StartupAngleGate_t *gate);
 /** Fresh, healthy, in-range readings must agree for 300 ms before readiness. */
 bool ModStartupAngle_Update(StartupAngleGate_t *gate, const FsusFeedback_t *feedback,
                             bool valid, bool fresh, uint32_t now_ms);
+/* Explicit encoder-zero recovery only. Does not expand normal control limits. */
+bool ModStartupAngle_UpdateRecovery(StartupAngleGate_t *gate,const FsusFeedback_t *feedback,
+                                    bool valid,bool fresh,uint32_t now_ms);
+bool ModStartupAngle_RecoveryPathOk(float angle,float start);
 #endif

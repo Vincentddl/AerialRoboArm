@@ -35,6 +35,8 @@
 /* demo_v7 app-layer entries */
 #include "app_control.h"
 #include "app_debug.h"
+#include "app_jy60_demo.h"
+#include "app_hx8_jy60_capture.h"
 
 /* USER CODE END Includes */
 
@@ -99,6 +101,21 @@ int main(void)
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
+#if defined(HX8_JY60_CAPTURE)
+  MX_GPIO_Init();
+  MX_DMA_Init();
+  MX_USART1_UART_Init();
+  MX_USART2_UART_Init();
+  MX_IWDG_Init();
+  App_Hx8Jy60Capture_Run();
+#elif defined(JY60_UART_DEMO)
+  /* Sensor-only path: no PWM, HX8 UART, HC13, control tasks or homing. */
+  MX_GPIO_Init();
+  MX_DMA_Init();
+  MX_USART1_UART_Init();
+  MX_IWDG_Init();
+  App_Jy60Demo_Run();
+#else
   MX_GPIO_Init();
   MX_DMA_Init();
   MX_I2C1_Init();       /* PB8/PB9 sensor bus; VL53L1X uses address 0x29. */
@@ -142,6 +159,7 @@ int main(void)
     /* USER CODE BEGIN 3 */
   }
   /* USER CODE END 3 */
+#endif
 }
 
 /**

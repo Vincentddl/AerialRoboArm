@@ -1,0 +1,115 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1920" height="1120" viewBox="0 0 1920 1120">
+<title>AerialRoboArm 控制系统重规划</title>
+<desc>遥控与视觉输入、模式与安全管理、机械臂行为、HX8 总线主臂、PWM 夹爪及预留姿态通道。</desc>
+<rect width="1920" height="1120" fill="#f6f8fc"/>
+<text x="60" y="40" dy="0.88em" text-anchor="start" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="45" font-weight="700" fill="#172b4d">AerialRoboArm 控制系统重规划</text>
+<text x="60" y="105" dy="0.88em" text-anchor="start" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="26" font-weight="400" fill="#52657e">HX8 内部闭环 · STM32 仲裁与执行监督 · PC 视觉语义输入</text>
+<text x="1710" y="56" dy="0.88em" text-anchor="start" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="24" font-weight="400" fill="#52657e">2026.10.21</text>
+<polyline points="62,165 112,165" fill="none" stroke="#315fbb" stroke-width="3"/>
+<polygon points="112.0,165.0 101.4,170.5 101.4,159.5" fill="#315fbb"/>
+<text x="125" y="150" dy="0.88em" text-anchor="start" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="22" font-weight="400" fill="#52657e">当前主链路</text>
+<polyline points="350,165 400,165" fill="none" stroke="#24775b" stroke-width="3" stroke-dasharray="9 7"/>
+<polygon points="400.0,165.0 389.4,170.5 389.4,159.5" fill="#24775b"/>
+<text x="415" y="150" dy="0.88em" text-anchor="start" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="22" font-weight="400" fill="#52657e">预留姿态通道</text>
+<text x="1420" y="153" dy="0.88em" text-anchor="start" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="20" font-weight="400" fill="#52657e">依据本地代码与配置，非整机验收</text>
+<rect x="60" y="205" width="320" height="590" rx="18" fill="#ffffff" stroke="#dce3ee" stroke-width="2"/>
+<rect x="60" y="205" width="320" height="62" rx="18" fill="#e8effb" stroke="none" stroke-width="2"/>
+<text x="220" y="221" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="28" font-weight="700" fill="#315fbb">输入与感知</text>
+<polyline points="385,236 425,236" fill="none" stroke="#315fbb" stroke-width="3"/>
+<polygon points="425.0,236.0 414.4,241.5 414.4,230.5" fill="#315fbb"/>
+<rect x="430" y="205" width="320" height="590" rx="18" fill="#ffffff" stroke="#dce3ee" stroke-width="2"/>
+<rect x="430" y="205" width="320" height="62" rx="18" fill="#e8effb" stroke="none" stroke-width="2"/>
+<text x="590" y="221" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="28" font-weight="700" fill="#315fbb">模式与安全</text>
+<polyline points="755,236 795,236" fill="none" stroke="#315fbb" stroke-width="3"/>
+<polygon points="795.0,236.0 784.4,241.5 784.4,230.5" fill="#315fbb"/>
+<rect x="800" y="205" width="320" height="590" rx="18" fill="#ffffff" stroke="#dce3ee" stroke-width="2"/>
+<rect x="800" y="205" width="320" height="62" rx="18" fill="#e8effb" stroke="none" stroke-width="2"/>
+<text x="960" y="221" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="28" font-weight="700" fill="#315fbb">行为与目标</text>
+<polyline points="1125,236 1165,236" fill="none" stroke="#315fbb" stroke-width="3"/>
+<polygon points="1165.0,236.0 1154.4,241.5 1154.4,230.5" fill="#315fbb"/>
+<rect x="1170" y="205" width="320" height="590" rx="18" fill="#ffffff" stroke="#dce3ee" stroke-width="2"/>
+<rect x="1170" y="205" width="320" height="62" rx="18" fill="#e8effb" stroke="none" stroke-width="2"/>
+<text x="1330" y="221" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="28" font-weight="700" fill="#315fbb">执行与反馈</text>
+<polyline points="1495,236 1535,236" fill="none" stroke="#315fbb" stroke-width="3"/>
+<polygon points="1535.0,236.0 1524.4,241.5 1524.4,230.5" fill="#315fbb"/>
+<rect x="1540" y="205" width="320" height="590" rx="18" fill="#ffffff" stroke="#dce3ee" stroke-width="2"/>
+<rect x="1540" y="205" width="320" height="62" rx="18" fill="#e8effb" stroke="none" stroke-width="2"/>
+<text x="1700" y="221" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="28" font-weight="700" fill="#315fbb">执行机构</text>
+<rect x="76" y="295" width="288" height="105" rx="11" fill="#f7f9fd" stroke="#cfdaeb" stroke-width="2"/>
+<text x="220" y="308" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="24" font-weight="700" fill="#315fbb">ELRS / CRSF</text>
+<text x="220" y="344" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="21" font-weight="400" fill="#52657e">人工操作与接管</text>
+<text x="220" y="372" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="19" font-weight="400" fill="#52657e">USART1 · 正常固件</text>
+<rect x="76" y="455" width="288" height="105" rx="11" fill="#f7f9fd" stroke="#cfdaeb" stroke-width="2"/>
+<text x="220" y="468" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="24" font-weight="700" fill="#315fbb">PC 视觉 → HC13</text>
+<text x="220" y="504" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="21" font-weight="400" fill="#52657e">识别、标定与目标角映射</text>
+<text x="220" y="532" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="19" font-weight="400" fill="#52657e">USART3 · MCU 接收语义</text>
+<rect x="76" y="615" width="288" height="105" rx="11" fill="#f7f9fd" stroke="#cfdaeb" stroke-width="2"/>
+<text x="220" y="628" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="24" font-weight="700" fill="#315fbb">RTT 调试输入</text>
+<text x="220" y="664" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="21" font-weight="400" fill="#52657e">请求交给控制任务处理</text>
+<text x="220" y="692" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="19" font-weight="400" fill="#52657e">台架模式需显式选择</text>
+<rect x="446" y="295" width="288" height="105" rx="11" fill="#f7f9fd" stroke="#cfdaeb" stroke-width="2"/>
+<text x="590" y="308" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="24" font-weight="700" fill="#315fbb">控制权仲裁</text>
+<text x="590" y="344" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="20" font-weight="400" fill="#52657e">MANUAL / AUTO / ERROR</text>
+<text x="590" y="372" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="19" font-weight="400" fill="#52657e">人工接管、故障锁存与复位</text>
+<rect x="446" y="455" width="288" height="105" rx="11" fill="#f7f9fd" stroke="#cfdaeb" stroke-width="2"/>
+<text x="590" y="468" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="24" font-weight="700" fill="#315fbb">主臂健康检查</text>
+<text x="590" y="504" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="21" font-weight="400" fill="#52657e">反馈年龄、电压、保护位</text>
+<text x="590" y="532" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="19" font-weight="400" fill="#52657e">角度范围与疑似跳变检查</text>
+<rect x="446" y="615" width="288" height="105" rx="11" fill="#f7f9fd" stroke="#cfdaeb" stroke-width="2"/>
+<text x="590" y="628" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="24" font-weight="700" fill="#315fbb">启动与恢复管理</text>
+<text x="590" y="664" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="21" font-weight="400" fill="#52657e">稳定角度、回零、重连</text>
+<text x="590" y="692" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="19" font-weight="400" fill="#52657e">恢复后重新确认控制准入</text>
+<rect x="816" y="295" width="288" height="105" rx="11" fill="#f7f9fd" stroke="#cfdaeb" stroke-width="2"/>
+<text x="960" y="308" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="24" font-weight="700" fill="#315fbb">机械臂行为状态机</text>
+<text x="960" y="344" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="21" font-weight="400" fill="#52657e">默认：视觉跟随 + CH4 夹爪</text>
+<text x="960" y="372" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="19" font-weight="400" fill="#52657e">三帧自动闭合为可选配置</text>
+<rect x="816" y="455" width="288" height="105" rx="11" fill="#f7f9fd" stroke="#cfdaeb" stroke-width="2"/>
+<text x="960" y="468" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="24" font-weight="700" fill="#315fbb">夹爪动作管理</text>
+<text x="960" y="504" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="21" font-weight="400" fill="#52657e">默认 CH4 控制开合</text>
+<text x="960" y="532" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="19" font-weight="400" fill="#52657e">可选：新视觉帧稳定后闭合</text>
+<rect x="816" y="615" width="288" height="105" rx="11" fill="#f7f9fd" stroke="#cfdaeb" stroke-width="2"/>
+<text x="960" y="628" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="24" font-weight="700" fill="#315fbb">运动目标整形</text>
+<text x="960" y="664" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="21" font-weight="400" fill="#52657e">限位、速度与加减速约束</text>
+<text x="960" y="692" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="19" font-weight="400" fill="#52657e">有界位置微调 / 命令去重</text>
+<rect x="1186" y="295" width="288" height="105" rx="11" fill="#f7f9fd" stroke="#cfdaeb" stroke-width="2"/>
+<text x="1330" y="308" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="24" font-weight="700" fill="#315fbb">Motion / FSUS</text>
+<text x="1330" y="344" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="21" font-weight="400" fill="#52657e">USART2 → UC-01 → HX8</text>
+<text x="1330" y="372" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="19" font-weight="400" fill="#52657e">位置指令发送与反馈查询</text>
+<rect x="1186" y="455" width="288" height="105" rx="11" fill="#f7f9fd" stroke="#cfdaeb" stroke-width="2"/>
+<text x="1330" y="468" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="24" font-weight="700" fill="#315fbb">夹爪 PWM 输出</text>
+<text x="1330" y="504" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="21" font-weight="400" fill="#52657e">TIM2_CH1 · PA0</text>
+<text x="1330" y="532" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="19" font-weight="400" fill="#52657e">指令不等同于抓取成功</text>
+<rect x="1186" y="615" width="288" height="105" rx="11" fill="#f0f8f4" stroke="#7fb49e" stroke-width="2" stroke-dasharray="9 6"/>
+<text x="1330" y="628" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="24" font-weight="700" fill="#24775b">姿态舵机 · 预留</text>
+<text x="1330" y="664" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="21" font-weight="400" fill="#52657e">TIM2_CH2 · PA1</text>
+<text x="1330" y="692" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="19" font-weight="400" fill="#52657e">默认禁用 / 尚未接入</text>
+<rect x="1556" y="295" width="288" height="105" rx="11" fill="#f7f9fd" stroke="#cfdaeb" stroke-width="2"/>
+<text x="1700" y="308" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="24" font-weight="700" fill="#315fbb">HX8 主臂关节</text>
+<text x="1700" y="344" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="21" font-weight="400" fill="#52657e">舵机内部完成位置闭环</text>
+<text x="1700" y="372" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="19" font-weight="400" fill="#52657e">角度、电压、电流与保护回读</text>
+<rect x="1556" y="455" width="288" height="105" rx="11" fill="#f7f9fd" stroke="#cfdaeb" stroke-width="2"/>
+<text x="1700" y="468" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="24" font-weight="700" fill="#315fbb">PTK 夹爪机构</text>
+<text x="1700" y="504" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="21" font-weight="400" fill="#52657e">执行开合指令</text>
+<text x="1700" y="532" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="19" font-weight="400" fill="#52657e">当前无独立位置/夹持反馈</text>
+<rect x="1556" y="615" width="288" height="105" rx="11" fill="#f0f8f4" stroke="#7fb49e" stroke-width="2" stroke-dasharray="9 6"/>
+<text x="1700" y="628" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="24" font-weight="700" fill="#24775b">姿态机构 · 预留</text>
+<text x="1700" y="664" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="21" font-weight="400" fill="#52657e">末端姿态调节</text>
+<text x="1700" y="692" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="19" font-weight="400" fill="#52657e">当前未接入</text>
+<polyline points="1474,348 1550,348" fill="none" stroke="#315fbb" stroke-width="3"/>
+<polygon points="1550.0,348.0 1539.4,353.5 1539.4,342.5" fill="#315fbb"/>
+<polyline points="1474,508 1550,508" fill="none" stroke="#315fbb" stroke-width="3"/>
+<polygon points="1550.0,508.0 1539.4,513.5 1539.4,502.5" fill="#315fbb"/>
+<polyline points="1700,400 1700,423 1330,423 1330,400" fill="none" stroke="#52657e" stroke-width="2"/>
+<polygon points="1330.0,400.0 1335.5,410.6 1324.5,410.6" fill="#52657e"/>
+<text x="1517" y="428" dy="0.88em" text-anchor="middle" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="17" font-weight="400" fill="#52657e">真实反馈（正常查询 100 ms）</text>
+<polyline points="1474,668 1550,668" fill="none" stroke="#24775b" stroke-width="2" stroke-dasharray="9 7"/>
+<polygon points="1550.0,668.0 1539.4,673.5 1539.4,662.5" fill="#24775b"/>
+<rect x="60" y="825" width="1800" height="125" rx="16" fill="#e8effb" stroke="#c7d6ef" stroke-width="2"/>
+<text x="85" y="846" dy="0.88em" text-anchor="start" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="27" font-weight="700" fill="#315fbb">调度</text>
+<text x="195" y="844" dy="0.88em" text-anchor="start" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="23" font-weight="400" fill="#172b4d">Control 20 ms  |  HX8 反馈查询 100 ms  |  Debug 100 ms  |  Housekeeping 1000 ms</text>
+<text x="195" y="889" dy="0.88em" text-anchor="start" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="23" font-weight="400" fill="#52657e">仅列控制范围内服务；实际执行耗时与反馈周期须测量，20 ms 调度不是已验证的响应上界。</text>
+<rect x="60" y="978" width="1800" height="112" rx="16" fill="#ffffff" stroke="#dce3ee" stroke-width="2"/>
+<text x="85" y="1000" dy="0.88em" text-anchor="start" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="27" font-weight="700" fill="#315fbb">观测</text>
+<text x="195" y="997" dy="0.88em" text-anchor="start" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="23" font-weight="400" fill="#172b4d">ControlTask → DataHub 快照 → RTT / 遥测；DebugRequest 承载调试任务到控制任务的请求。</text>
+<text x="195" y="1040" dy="0.88em" text-anchor="start" font-family="Microsoft YaHei, Noto Sans CJK SC, sans-serif" font-size="23" font-weight="400" fill="#52657e">安全检查覆盖输入、决策与执行；下一步将正常控制、回零和调试路径收敛到统一最终准入。</text>
+</svg>

@@ -16,7 +16,9 @@ HC13 在本项目中只作为透明无线串口使用，不参与 ELRS/CRSF 链�
 | Max packet size | `< 1000 bytes` | HC13 单包不要超过 `1000 bytes`。当前控制帧远小于该限制。 |
 | Duplex | Half-duplex | 不能同时空中收发；做遥控链路时应避免高频双向刷屏。 |
 
-当前实测低延迟回显链路，发送 `V,35,300,90\n` 后 PC 端收到 `RX:V,35,300,90`，往返大约 `28..31 ms`。粗略估算单向延迟约 `14..16 ms`，实际控制延迟还会叠加串口助手、任务调度和解析周期。
+历史低延迟回显记录：发送 `V,35,300,90\n` 后 PC 端收到 `RX:V,35,300,90`，往返约 `28..31 ms`。历史记录中的 `RTT/2` 只是往返对称假设下的估算，不能写成单向实测。
+
+2026-10-23新增纯通信诊断固件实测：230400 8N1、请求14字节/回复14字节、请求间隔目标50ms，3轮各200个正式样本，600个全部有效返回。合并RTT中位数10.013ms、P95 10.224ms、最小9.768ms、最大10.605ms。MCU使用立即诊断回复，不含正常20ms控制调度和200ms应用ACK限频。它包含PC USB与双向无线链路，不是单向延迟。距离、信道和空中模式未在本轮独立记录/查询，因此不能泛化到其他工况。数据见 `outputs/hc13_rtt_20261023_145603/`；测试后原HX8/JY61P采集固件已完整恢复并逐字节读回核验。
 
 ## Electrical Parameters
 
@@ -174,8 +176,13 @@ V,<integer_servo_g_deg>,0,<confidence_percent>\r\n
 ```
 
 The speed field is in `deg/s`. The daily PC runtime deliberately sends `0`,
-which selects the MCU's conservative `80 deg/s` AUTO default. If a future PC
-runtime sends a non-zero speed, the MCU constrains it to `20..200 deg/s` before
+which selects the MCU's `500 deg/s` AUTO software cap as of 2026-10-23. This is
+not a measured maximum safe speed for the loaded mechanism. The AUTO ramps
+are `100 ms` each. At 500 deg/s the nominal linear ramp slope is
+`5000 deg/s^2`, versus the
+former 80 deg/s configuration's `400 deg/s^2`. The protocol minimum of 20 ms
+is not a validated safe minimum for the loaded mechanism. If a future PC
+runtime sends a non-zero speed, the MCU constrains it to `20..500 deg/s` before
 passing it to the HX8 motion command.
 
 `TaskArbiter` accepts the command only when all normal RC/servo/E-stop safety

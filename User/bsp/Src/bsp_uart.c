@@ -76,6 +76,7 @@ static volatile uint32_t s_fsus_rx_rearm_failures = 0U;
 static volatile uint32_t s_fsus_rx_overflows = 0U;
 static volatile uint32_t s_fsus_last_hal_error = HAL_UART_ERROR_NONE;
 static uint32_t s_fsus_last_tx_complete_ms = 0U;
+static uint32_t s_fsus_last_tx_start_ms = 0U;
 static volatile uint32_t s_elrs_rx_bytes = 0U;
 static volatile uint32_t s_hc13_rx_bytes = 0U;
 static volatile uint32_t s_uart_rx_dma_recoveries = 0U;
@@ -250,7 +251,9 @@ void BSP_UART_Init(void)
 
     /* 4. Start interrupt-based RX on USART3 (HC13).
      *     One byte per interrupt, pushed directly into the HC13 parser FIFO. */
+#if !defined(HX8_JY60_CAPTURE)
     HAL_UART_Receive_IT(&huart3, &s_hc13_rx_byte, 1);
+#endif
 
     /* 5. Half-duplex context init (legacy, kept for reference). */
     memset(&s_hd_ctx, 0, sizeof(s_hd_ctx));
@@ -288,6 +291,22 @@ AraStatus_t BSP_UART_Send_DMA(BspUart_Dev_t dev, uint8_t *p_data, uint16_t len)
     return ARA_OK;
 }
 
+#if defined(JY61P_CAPTURE)
+AraStatus_t BSP_UART_ImuSetBaud(uint32_t baud)
+{
+    UartContext_t *ctx=&uart_ctx[BSP_UART_ELRS];
+    if (HAL_UART_Abort(ctx->huart)!=HAL_OK) return ARA_ERR_IO;
+    ctx->huart->Init.BaudRate=baud;
+    if (HAL_UART_Init(ctx->huart)!=HAL_OK) return ARA_ERR_IO;
+    ctx->rx_tail_pos=0;
+    return HAL_UART_Receive_DMA(ctx->huart,ctx->rx_buffer,ctx->rx_buffer_size)==HAL_OK ? ARA_OK : ARA_ERR_IO;
+}
+AraStatus_t BSP_UART_ImuWrite(const uint8_t *data,uint16_t len)
+{
+    return HAL_UART_Transmit(uart_ctx[BSP_UART_ELRS].huart,(uint8_t *)data,len,50)==HAL_OK ? ARA_OK : ARA_ERR_IO;
+}
+#endif
+
 uint16_t BSP_UART_Read(BspUart_Dev_t dev, uint8_t *p_data, uint16_t len)
 {
     if (dev >= BSP_UART_NUM || p_data == NULL) return 0;
@@ -298,6 +317,7 @@ uint16_t BSP_UART_Read(BspUart_Dev_t dev, uint8_t *p_data, uint16_t len)
     /* Legacy ST3215 RX was event-driven, not ringbuffer; reject ringbuffer reads on it */
     if (dev == BSP_UART_ST3215) return 0;
 
+    uint32_t recovery_generation=s_uart_rx_dma_recoveries;
     uint16_t head = GetDmaHead(dev);
     uint16_t tail = ctx->rx_tail_pos;
     uint16_t bytes_available = (head >= tail) ? (head - tail) : ((ctx->rx_buffer_size - tail) + head);
@@ -312,7 +332,16 @@ uint16_t BSP_UART_Read(BspUart_Dev_t dev, uint8_t *p_data, uint16_t len)
         if (tail >= ctx->rx_buffer_size) tail = 0;
     }
 
+    /* Error IRQ may restart circular DMA while the foreground copies bytes.
+     * Do not overwrite its reset cursor or feed stale memory as new packets. */
+    uint32_t irq_mask=__get_PRIMASK();
+    __disable_irq();
+    if (recovery_generation!=s_uart_rx_dma_recoveries) {
+        if (!irq_mask) __enable_irq();
+        return 0;
+    }
     ctx->rx_tail_pos = tail;
+    if (!irq_mask) __enable_irq();
 
     return read_len;
 }
@@ -587,10 +616,15 @@ AraStatus_t BSP_UART_Fsus_Send(const uint8_t *data, uint16_t len)
         const uint32_t now_ms = HAL_GetTick();
         const uint32_t elapsed_ms = now_ms - s_fsus_last_tx_complete_ms;
         if (elapsed_ms < UART_FSUS_MIN_FRAME_GAP_MS) {
+#if defined(HX8_JY60_CAPTURE)
+            HAL_Delay(UART_FSUS_MIN_FRAME_GAP_MS - elapsed_ms);
+#else
             vTaskDelay(pdMS_TO_TICKS(UART_FSUS_MIN_FRAME_GAP_MS - elapsed_ms));
+#endif
         }
     }
 
+    s_fsus_last_tx_start_ms = HAL_GetTick();
     const HAL_StatusTypeDef result = HAL_UART_Transmit(&huart2,
                                                         (uint8_t *)data,
                                                         len,
@@ -623,6 +657,7 @@ void BSP_UART_Fsus_Flush(void)
 }
 
 uint32_t BSP_UART_Fsus_GetTxBytes(void) { return s_fsus_tx_bytes; }
+uint32_t BSP_UART_Fsus_GetLastTxStartMs(void) { return s_fsus_last_tx_start_ms; }
 uint32_t BSP_UART_Fsus_GetRxBytes(void) { return s_fsus_rx_bytes; }
 uint32_t BSP_UART_Fsus_GetTxErrors(void) { return s_fsus_tx_errors; }
 uint32_t BSP_UART_Fsus_GetRxErrors(void) { return s_fsus_rx_errors; }

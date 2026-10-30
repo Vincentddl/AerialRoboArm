@@ -1,0 +1,151 @@
+{
+  "reviewed_at_utc": "2026-10-22T13:57:28.368632+00:00",
+  "note": "Hashes below are review-time snapshots. The earlier timing record stored model hash and environment, not measurement-time hashes for every source file.",
+  "measurement_record_sha256": "6a0a61a2169feec1f42855512694b137152bd20de498ed88d7763ccf0c3a3b9a",
+  "items": [
+    {
+      "evidence_id": "E01",
+      "path": "C:\\Users\\Vincent Lu\\Desktop\\gitcode\\AerialRoboArm\\outputs\\vision_plan_20261022\\pc_processing_benchmark.json",
+      "bytes": 94620,
+      "sha256": "6a0a61a2169feec1f42855512694b137152bd20de498ed88d7763ccf0c3a3b9a"
+    },
+    {
+      "evidence_id": "E02",
+      "path": "C:\\Users\\Vincent Lu\\Desktop\\gitcode\\AerialRoboArm\\Doc\\hardware\\hc13_config.md",
+      "bytes": 7606,
+      "sha256": "ae6f279af4e163ecd49bfd44a30472e443fa5cce5188a67dc7e90b9d7bb42047"
+    },
+    {
+      "evidence_id": "E03",
+      "path": "C:\\Users\\Vincent Lu\\Desktop\\gitcode\\AerialRoboArm\\Core\\Src\\tim.c",
+      "bytes": 4165,
+      "sha256": "2953e720740a1b49422e492a671149af36e59546b188c55e093b07e8c165ecbc"
+    },
+    {
+      "evidence_id": "E03",
+      "path": "C:\\Users\\Vincent Lu\\Desktop\\gitcode\\AerialRoboArm\\User\\global\\Inc\\ara_prio.h",
+      "bytes": 3737,
+      "sha256": "6eb2713de1f60e06148f406181ac5e2950fc8a71d12658ff814e3b8171adeb3d"
+    },
+    {
+      "evidence_id": "E03",
+      "path": "C:\\Users\\Vincent Lu\\Desktop\\gitcode\\AerialRoboArm\\User\\task\\Inc\\task_motion.h",
+      "bytes": 5730,
+      "sha256": "e5f16a22800cccafe1927b70306b638d659af446e0ad1e2d01f2f27aa7b18faa"
+    },
+    {
+      "evidence_id": "E03",
+      "path": "C:\\Users\\Vincent Lu\\Desktop\\gitcode\\AerialRoboArm\\User\\drv\\Src\\drv_fsus.c",
+      "bytes": 14095,
+      "sha256": "0af8ccce26bbde5bff70c7478b756a008b4400761cec9a117d923dbf691e35d7"
+    },
+    {
+      "evidence_id": "E03",
+      "path": "C:\\Users\\Vincent Lu\\Desktop\\gitcode\\AerialRoboArm\\User\\bsp\\Src\\bsp_uart.c",
+      "bytes": 24133,
+      "sha256": "4a279f1a6003eca2103fa48d19418d37416a2193e7203627d26032fa46deb85f"
+    },
+    {
+      "evidence_id": "E03",
+      "path": "C:\\Users\\Vincent Lu\\Desktop\\gitcode\\AerialRoboArm\\User\\task\\Src\\task_manipulator.c",
+      "bytes": 10315,
+      "sha256": "dc550281438cabbef23075a5a1707e3ef90bafb38a0b7fd65b2d372f8616f006"
+    },
+    {
+      "evidence_id": "E04",
+      "path": "C:\\Users\\Vincent Lu\\Desktop\\gitcode\\AerialRoboArm\\Figures\\vision_hardware_20261022\\camera_vtx_reference.png",
+      "bytes": 100514,
+      "sha256": "2790b14503b5de5501ac9670032af73e01cd03b628414c2a9c98f942f67bea5a"
+    },
+    {
+      "evidence_id": "E04",
+      "path": "C:\\Users\\Vincent Lu\\Desktop\\gitcode\\AerialRoboArm\\Figures\\vision_hardware_20261022\\uvc_receiver_reference.png",
+      "bytes": 452289,
+      "sha256": "67fc5cbd81f170768307b519c1d40ef8fecaa0655116a168f1c5a05901f288bf"
+    },
+    {
+      "evidence_id": "E05",
+      "path": "D:\\Study_data\\AerialRoboArm-Vision-Core\\models\\foam_center_v9_gripper_axis_normal_bg03_20260816_candidate.pt",
+      "bytes": 20493924,
+      "sha256": "04595f4f5d92afc5ec219d1a7a3e20d2b1a8a6ad7d01230813a954d019b7a8c3"
+    },
+    {
+      "evidence_id": "E05",
+      "path": "D:\\Study_data\\AerialRoboArm-Vision-Core\\models\\README.md",
+      "bytes": 3022,
+      "sha256": "500746f09c50313bd3c82933e2aa7986cdc4d4c2ff61f8fc728dcc53bddae4b4"
+    },
+    {
+      "evidence_id": "E05",
+      "path": "D:\\Study_data\\AerialRoboArm-Vision-Core\\models\\foam_center_v9_gripper_axis_normal_bg03_20260816_candidate.json",
+      "bytes": 2705,
+      "sha256": "aeacd870e52ab397bf4da6aececaa61eb03d1aa0197606fdebf65e857bfb14a2"
+    },
+    {
+      "evidence_id": "E06",
+      "path": "D:\\Study_data\\AerialRoboArm-Vision-Core\\configs\\camera_2p1mm_640x480_fisheye.json",
+      "bytes": 6643,
+      "sha256": "f92edde146426695411159802c6b02f68bbf2c7c69f0c8fbfe4e5cdd453ee76c"
+    },
+    {
+      "evidence_id": "E06",
+      "path": "D:\\Study_data\\AerialRoboArm-Vision-Core\\configs\\servo_to_optical_angle_foam_center_lut_20261008_combined_v1.json",
+      "bytes": 7236,
+      "sha256": "959ce950d7eded3e35feaa236362860c3ff3c36b052e8171dc63edfcb922cc48"
+    },
+    {
+      "evidence_id": "E07",
+      "path": "C:\\Users\\Vincent Lu\\Desktop\\gitcode\\AerialRoboArm\\CMakeLists.txt",
+      "bytes": 5061,
+      "sha256": "bc256e869d9dcc5e7a66fcc5ff086ba428003438f4210d24e7a81fed56063fbc"
+    },
+    {
+      "evidence_id": "E07",
+      "path": "C:\\Users\\Vincent Lu\\Desktop\\gitcode\\AerialRoboArm\\User\\task\\Inc\\task_manipulator.h",
+      "bytes": 3840,
+      "sha256": "c5dccddaf75a8c08dbb75ba55d5575dd92a5fd706fb10cc382eb84fcf0610528"
+    },
+    {
+      "evidence_id": "E07",
+      "path": "C:\\Users\\Vincent Lu\\Desktop\\gitcode\\AerialRoboArm\\cmake-build-debug\\CMakeCache.txt",
+      "bytes": 16948,
+      "sha256": "e3c0fd5599468b8749c07cdd246cfaee73970ae2d01c72f00036245c4d11f32b"
+    },
+    {
+      "evidence_id": "E08",
+      "path": "D:\\Study_data\\AerialRoboArm-Vision-Core\\start_fast_vision_control.bat",
+      "bytes": 475,
+      "sha256": "8ae4c402cb7dad432f32a847175dfcee23dc557071a977685c920f92904a35d5"
+    },
+    {
+      "evidence_id": "E08",
+      "path": "D:\\Study_data\\AerialRoboArm-Vision-Core\\run_realtime.py",
+      "bytes": 4148,
+      "sha256": "04a07e171d06eb84008a9df44d802f48624ce2c75fd5cd15290713547f68a349"
+    },
+    {
+      "evidence_id": "E08",
+      "path": "D:\\Study_data\\AerialRoboArm-Vision-Core\\vision\\runtime.py",
+      "bytes": 40404,
+      "sha256": "8d815b0f541b1a98020912855635444e42a608284da41e498bc56b6ec292b5c5"
+    },
+    {
+      "evidence_id": "E08",
+      "path": "D:\\Study_data\\AerialRoboArm-Vision-Core\\vision\\tracker.py",
+      "bytes": 58362,
+      "sha256": "f40ffdb58573f74587b6fd218c6ec2aa0a4628b514df476a43929c83ff329193"
+    },
+    {
+      "evidence_id": "E08",
+      "path": "D:\\Study_data\\AerialRoboArm-Vision-Core\\vision\\servo_angle_calibration.py",
+      "bytes": 8620,
+      "sha256": "1cff6ff627d39e5ee3bc4d65e76e8545acceb6b5d6525f6b12e121e34e1ba383"
+    },
+    {
+      "evidence_id": "E08",
+      "path": "D:\\Study_data\\AerialRoboArm-Vision-Core\\vision\\hc13_link.py",
+      "bytes": 7260,
+      "sha256": "870a50242e2015581867e1cb45b783a6f7f40ffdd3a922ec8a191aee1d27de40"
+    }
+  ]
+}

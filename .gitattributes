@@ -1,0 +1,6 @@
+# Preserve binary artifacts exactly, including ASCII-encoded PDF documents.
+*.pdf binary
+*.zip binary
+*.png binary
+*.jpg binary
+*.jpeg binary

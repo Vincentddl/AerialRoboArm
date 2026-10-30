@@ -44,11 +44,14 @@
 #define TASK_MOTION_DEFAULT_T_ACC_MS    (100U)  /**< Manual acceleration ramp. */
 #define TASK_MOTION_DEFAULT_T_DEC_MS    (100U)  /**< Manual braking ramp. */
 #define TASK_MOTION_DEFAULT_POWER_MW    (0U)    /**< 0 = servo auto-calc. */
-#define TASK_MOTION_AUTO_VELOCITY       (80.0f) /**< Conservative first-stage vision AUTO speed. */
 #define TASK_MOTION_AUTO_VELOCITY_MIN   (20.0f) /**< Lowest accepted non-zero HC13 AUTO speed. */
-#define TASK_MOTION_AUTO_VELOCITY_MAX   (200.0f)/**< Safety cap for HC13 AUTO speed commands. */
-#define TASK_MOTION_AUTO_T_ACC_MS       (200U)  /**< Smooth AUTO acceleration for bench validation. */
-#define TASK_MOTION_AUTO_T_DEC_MS       (200U)  /**< Smooth AUTO deceleration for bench validation. */
+#define TASK_MOTION_AUTO_VELOCITY_MAX   (500.0f)/**< Software cap; loaded mechanism safety requires measurement. */
+#define TASK_MOTION_AUTO_VELOCITY       TASK_MOTION_AUTO_VELOCITY_MAX /**< speed=0 selects the software cap. */
+/* At the 500 deg/s software cap, 100 ms ramps imply 5000 deg/s^2
+ * under a linear-ramp approximation. The protocol's
+ * 20 ms minimum is not a validated minimum safe time for the mechanism. */
+#define TASK_MOTION_AUTO_T_ACC_MS       (100U)
+#define TASK_MOTION_AUTO_T_DEC_MS       (100U)
 #define TASK_MOTION_ONLINE_GRACE_MS     (3000U) /**< Ignore brief telemetry dropouts. */
 #define TASK_MOTION_FEEDBACK_PERIOD_MS  (100U)  /**< ServoMonitor polling period. */
 #define TASK_MOTION_COMMAND_REFRESH_MS  (1000U) /**< Lower-rate held-target retry; fresh position queries still run at 10 Hz. */

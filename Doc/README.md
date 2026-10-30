@@ -7,8 +7,15 @@ This directory contains the curated documentation for the AerialRoboArm electric
 | Document | Purpose |
 | --- | --- |
 | [MY_WORK.md](./MY_WORK.md) | Personal contribution boundary and work summary. |
+| [design/06_CONTROL_SYSTEM_REPLAN.md](./design/06_CONTROL_SYSTEM_REPLAN.md) | Control-system replan: RC/vision inputs, HX8/FSUS main-arm control, PWM gripper, task timing, arbitration, and safety. |
+| [design/07_MONOCULAR_VISION_GRASP_PLAN.md](./design/07_MONOCULAR_VISION_GRASP_PLAN.md) | Detailed monocular vision and three-frame grasp plan: hardware, formulas, measured PC timing, conditional latency budget, comparisons, and validation. |
 | [About AI Assist Pipeline - Share.md](./About%20AI%20Assist%20Pipeline%20-%20Share.md) | DACMAS AI-native development workflow and methodology. |
 | [hardware/pinmap.md](./hardware/pinmap.md) | STM32 pin assignment and external wiring reference. |
+| [hardware/JY60_IMU.md](./hardware/JY60_IMU.md) | JY60 supply, UART protocol, measurement limits and source discrepancies; not used for arm control yet. |
+| [hardware/JY61P_CAPTURE.md](./hardware/JY61P_CAPTURE.md) | JY61P 200 Hz on former ELRS USART1: startup configuration, rate checks, wiring and capture. |
+| [hardware/JY60_UART_DEMO.md](./hardware/JY60_UART_DEMO.md) | Sensor-only JY60 demo using the former ELRS USART1 connector, flash/RTT instructions and hardware verification. |
+| [hardware/HX8_JY60_CAPTURE.md](./hardware/HX8_JY60_CAPTURE.md) | Synchronized HX8 command and JY60 recording: VOFA 9090, capture 9091, MCU timestamps, automatic start/end. |
+| [hardware/HC13_HOST_PROTOCOL_V1.md](./hardware/HC13_HOST_PROTOCOL_V1.md) | Host interface contract: sensor telemetry, HX8 and gripper commands, modes, acknowledgments and completion. Specification only; firmware/GUI integration pending. |
 | [hardware/vl53l1x_grasp_gate.md](./hardware/vl53l1x_grasp_gate.md) | VL53L1X wiring and gripper gate notes for the active I2C distance-sensor path. |
 | [hardware/vl53l0x_tof.md](./hardware/vl53l0x_tof.md) | Superseded GY-VL53L0X bring-up notes retained for rollback. |
 | [demo/final-demo.md](./demo/final-demo.md) | Final `demo_v6` demo/testbench scope and media entry points. |

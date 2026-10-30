@@ -31,6 +31,17 @@ static void setup(void)
 }
 int main(void)
 {
+    /* Exercise the external speed=0 contract and its bounds in both schemes. */
+    setup(); arb.target_speed=0; tick(1000);
+    assert(cmd.velocity_deg_per_s == 500.0f);
+    assert(cmd.t_acc_ms == 100U && cmd.t_dec_ms == 100U);
+    arb.target_speed=5; tick(1020);
+    assert(cmd.velocity_deg_per_s == 20.0f);
+    arb.target_speed=350; tick(1030);
+    assert(cmd.velocity_deg_per_s == 350.0f);
+    arb.target_speed=65000; tick(1040);
+    assert(cmd.velocity_deg_per_s == 500.0f);
+    arb.estop=true; tick(1060); assert(!cmd.torque_on);
 #if !TASK_MANIP_AUTO_GRIP_THREE_FRAME
     RcControlData_t rc = {0}; VisionIntent_t vision = {0};
     rc.is_link_up = true; rc.estop_state = ESTOP_RELEASED;

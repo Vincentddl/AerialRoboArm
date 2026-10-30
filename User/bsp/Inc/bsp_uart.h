@@ -29,6 +29,11 @@ typedef enum {
  * ============================================================================= */
 
 void BSP_UART_Init(void);
+#if defined(JY61P_CAPTURE)
+/* Standalone capture only; resets the USART1 DMA receive cursor. */
+AraStatus_t BSP_UART_ImuSetBaud(uint32_t baud);
+AraStatus_t BSP_UART_ImuWrite(const uint8_t *data, uint16_t len);
+#endif
 
 /* Debug / Logging */
 void BSP_UART_Printf(const char *format, ...);
@@ -60,6 +65,7 @@ void BSP_UART_SetRxCpltCallback(BspUart_Dev_t dev, AraCallback_t cb);
  * @return ARA_OK only when HAL accepted and completed the whole frame.
  */
 AraStatus_t BSP_UART_Fsus_Send(const uint8_t *data, uint16_t len);
+uint32_t BSP_UART_Fsus_GetLastTxStartMs(void);
 
 /**
  * @brief Ensure USART2 single-byte interrupt reception is armed.

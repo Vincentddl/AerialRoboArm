@@ -36,6 +36,25 @@ int main(void)
     assert(!sample(0xFFFFFF64U, .1f));
     assert(!sample(0xFFFFFFC8U, .1f));
     assert(sample(44U, 0));
+    /* Out-of-range readings stay rejected by normal control, while explicit
+     * encoder-zero recovery gets its own healthy/stable gate. */
+    ModStartupAngle_Reset(&gate);fb.voltage_mv=12000;fb.status=0;
+    assert(!sample(0,128.4f));
+    for (unsigned i=0;i<4;i++) {
+        fb.angle_deg=128.4f;fb.timestamp_ms=i*100U;
+        assert(ModStartupAngle_UpdateRecovery(&gate,&fb,true,true,i*100U)==(i==3));
+    }
+    fb.status=4;assert(!ModStartupAngle_UpdateRecovery(&gate,&fb,true,true,400));
+    fb.status=0;fb.angle_deg=181;assert(!ModStartupAngle_UpdateRecovery(&gate,&fb,true,true,500));
+    fb.angle_deg=NAN;assert(!ModStartupAngle_UpdateRecovery(&gate,&fb,true,true,600));
+    assert(ModStartupAngle_RecoveryPathOk(128.4f,128.4f));
+    assert(ModStartupAngle_RecoveryPathOk(85,128.4f));
+    assert(ModStartupAngle_RecoveryPathOk(0,128.4f));
+    assert(!ModStartupAngle_RecoveryPathOk(131,128.4f));
+    assert(!ModStartupAngle_RecoveryPathOk(-3,128.4f));
+    assert(ModStartupAngle_RecoveryPathOk(-90,-128));
+    assert(!ModStartupAngle_RecoveryPathOk(-131,-128));
+    assert(!ModStartupAngle_RecoveryPathOk(NAN,128));
     puts("Startup angle tests passed: transient first frame, stable window, stale/fault/range rejection, wrap.");
     return 0;
 }

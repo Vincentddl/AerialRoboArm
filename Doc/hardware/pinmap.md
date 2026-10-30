@@ -45,6 +45,12 @@ BSP_PWM_Init()
 
 ## 当前运行时引脚占用
 
+### 待接入硬件资料
+
+JY60 六轴姿态模块的关键参数、TTL 串口协议和接线参考见 [JY60_IMU.md](./JY60_IMU.md)。[独立测试固件](./JY60_UART_DEMO.md) 已复用原 ELRS 接口：PB7 接 JY60 TX，PB6 接 JY60 RX，USART1 为 9600 baud；已验证 20 Hz 有效回包，未加入机械臂闭环。默认完整固件仍使用 ELRS 的 420000 baud 配置。JY60 需 3.3～5 V 供电，SCL/SDA 为预留，测试前必须断开原 ELRS 接收机。
+
+### 已启用引脚
+
 | STM32 引脚 | PCB 网络名 | 当前固件功能 | 方向 | 说明 |
 | --- | --- | --- | --- | --- |
 | PC13 | `PC13` | GPIO_Output | Output | 状态 LED / 状态输出，由 `DevStatus_LedSet()` 间接控制。 |
