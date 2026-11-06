@@ -1,8 +1,8 @@
-# HC13统一调试协议 V2（AerialRoboArm）
+# HC13统一调试协议 V2
 
-2026-10-30：本仓库已实现并完成ARM编译和软件互通。上位机为 `C:\Users\Vincent Lu\Downloads\desktop_app`，其 `v1_protocol.py/v1_state.py` 保留历史文件名，实际使用V2。**本次没有烧录或实物动作。**
+适用：`HC13_HOST_LINK=ON`的HX8/JY61P实验构建。更新：2026-11-06。格式依据`mod_hc13_host.c`，不适用于正式控制固件的持续视觉跟随协议。
 
-与另一份103_a后端不同，本实现保留JY61P约200 Hz、HC13约20 Hz ACC、SERVO1独立调试和RECORD门控。ELRS不参与此构建。
+V2共享一个USART3处理控制与遥测，保留JY61P内部采集、夹爪独立调试和记录开关。程序构建、软件测试、历史查询往返及真实机构动作分别验证，不能互相代替。
 
 ## 传输和单位
 
@@ -107,6 +107,6 @@ PICK运动阶段向HX8请求5 ms轮询间隔，实际频率受串口5 ms帧间�
 .\tools\build_hc13_host.ps1
 ```
 
-新版上位机互通测试使用 `tests/test_current_mcu_v2.py`，通过模拟串口连接实际C协议模块；HAL和执行器均模拟，没有运行实物。正式程序约FLASH35.4 KB、RAM13.8 KB。
+本MCU仓库使用 `tests/test_hc13_host.c` 和 `tools/test_hc13_host.ps1` 验证实际C协议模块。电脑端互通测试随外部上位机项目提供，不在本仓库内；HAL和执行器使用模拟，不能代替实物验证。V2专用固件约FLASH35.4 KB、RAM13.8 KB，不是默认正式控制固件的大小。
 
-详情见 [HC13_HOST_BUILD.md](./HC13_HOST_BUILD.md)。本次不烧录；后续先检查INFO/CAL/STATE/ACC，再标定等待时间与折叠位置，最后由用户明确启动动作。
+使用顺序与构建见 [HC13_HOST_BUILD.md](./HC13_HOST_BUILD.md)：先只读确认INFO/CAL/STATE/ACC，再核对标定及机构条件，由操作者明确启动动作。

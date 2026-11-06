@@ -100,11 +100,7 @@ add_definitions(-DDEBUG -DUSE_HAL_DRIVER -DSTM32F103xB)
 
 file(GLOB_RECURSE SOURCES "Core/*.*" "Middlewares/*.*" "Drivers/*.*" "User/*.*")
 
-# ===== demo_v7: exclude legacy code from build =====
-list(FILTER SOURCES EXCLUDE REGEX ".*User/archive/.*$")
-list(FILTER SOURCES EXCLUDE REGEX ".*test_console_drvtest\\.c$")
-list(FILTER SOURCES EXCLUDE REGEX ".*app_threads\\.(c|h)$")
-list(FILTER SOURCES EXCLUDE REGEX ".*app_testbench\\.(c|h)$")
+# The older VL53L0X driver is retained for hardware reference only.
 list(FILTER SOURCES EXCLUDE REGEX ".*drv_vl53l0x\\.(c|h)$")
 list(FILTER SOURCES EXCLUDE REGEX ".*tests/.*$")
 

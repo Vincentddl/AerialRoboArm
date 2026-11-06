@@ -240,7 +240,7 @@ void BSP_UART_Init(void)
     }
 
     /* 2. Start Circular DMA RX for ELRS ring buffer. DEBUG/UART3 is now
-     *    served by J-Link RTT — no hardware UART DMA needed for console. */
+     *    served by SEGGER RTT over DAPLink/OpenOCD; no console UART DMA. */
     HAL_UART_Receive_DMA(uart_ctx[BSP_UART_ELRS].huart,
                          uart_ctx[BSP_UART_ELRS].rx_buffer,
                          uart_ctx[BSP_UART_ELRS].rx_buffer_size);

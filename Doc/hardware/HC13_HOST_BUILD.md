@@ -1,83 +1,53 @@
-# HC13统一调试固件 V2
+# HC13 V2无线调试构建与对接
 
-2026-10-30：代码、ARM编译和新版desktop_app软件互通完成。**按用户要求未烧录，未驱动实物。**
+用途：电脑经两块HC13控制HX8和夹爪，回传状态及JY61P加速度；独立于正式ELRS/视觉控制构建。更新：2026-11-06。
 
-## 对应项目与接口
-
-- MCU：AerialRoboArm，`HC13_HOST_LINK=ON` 构建。
-- PC：`C:\Users\Vincent Lu\Downloads\desktop_app`，实际V2，模块仍叫v1_protocol/v1_state。
-- USART1 PB6/PB7：JY61P，启动配置115200、约200 Hz。
-- USART2 PA2/PA3：HX8/UC-01，115200。
-- USART3 PB10/PB11：HC13，230400、8N1，统一所有PC控制和无线回传。
-- PA0 TIM2 CH1：SERVO1，333 Hz，沿用PTK分段脉宽。PA1/SERVO2不启动。
-- 不依赖ELRS。RTT保留诊断和完整记录，但不执行此构建中的旧RTT角度命令。
-
-## 编译，不烧录
+## 编译与入口
 
 ```powershell
 .\tools\build_hc13_host.ps1
-```
-
-输出：`cmake-build-hc13-host/FOC_DEMO2.elf`、`.hex`、`.bin`。
-
-该脚本不调用OpenOCD，不烧录。选项为HX8_JY60_CAPTURE=ON、JY61P_CAPTURE=ON、HC13_HOST_LINK=ON、JY61P_DIAGNOSTIC=OFF。HC13_HOST_LINK默认OFF，旧采集/完整控制程序仍能分别编译。
-
-当前Debug镜像约FLASH35.4 KB、RAM13.8 KB，处于64 KB/20 KB范围内。host构建RTT缓冲4 KB，旧独立采集构建仍8 KB。
-
-## V2流程
-
-完整线格式和状态语义见 [HC13_HOST_PROTOCOL_V2.md](./HC13_HOST_PROTOCOL_V2.md)。
-
-| 操作 | 新行为 |
-| --- | --- |
-| MODE | 只切换路由，清除旧候选/准备；不移动、不打开夹爪 |
-| HOME/NORMAL/PREP | 同一个竖直位0°→新鲜反馈确认→开爪PWM→等待标定时间→READY、DONE |
-| PICK | 一次锁定目标/速度/3～5°提前量的联动动作，必须先READY |
-| V | mdeg，只保存500 ms内候选，不直接运动 |
-| TRIGGER | 触发一次候选PICK，消费候选 |
-| MOVE | 普通位置调试，不自动闭爪 |
-| 折叠 | 先闭爪、等待、再移动到已标定后折位置 |
-| STOP/故障/模式退出 | 中止待闭爪、准备和候选，保持HX8；不回放旧目标、不自动松爪 |
-
-闭爪只由新的实际位置反馈越过阈值触发，一次最多一次。PICK期间请求5 ms反馈轮询，受UART帧间隔和硬件刷新限制；不声称实际达到200 Hz。更快轮询不缩短到位约200 ms安静确认。
-
-上电没有自动归零或PWM输出。传感器启动期间的缓存控制被丢弃，等待PC重新查询，不执行旧请求。
-
-## 当前配置和必要标定
-
-配置集中在 `User/app/Inc/app_hc13_host_config.h`：
-
-- 竖直位0°，HOME与NORMAL同源，负向前伸，普通位置软件限位−90°～+85°。
-- 最高500°/s软件上限、MOVE/PICK加减速各100 ms；准备和折叠30°/s、加减速各500 ms。
-- SERVO1张开135°、闭合90°，只有命令，没有夹持/实际角度反馈。
-- 默认提前闭爪4°，PICK允许3～5°。
-- **用户确认没有实测开爪、闭爪等待时间，故HOST_OPEN_WAIT_MS/HOST_CLOSE_WAIT_MS保持−1，对外NA。**
-- 后折位置仍未标定，HOST_FOLD_CALIBRATED=0，对外NA。
-
-因此默认程序可以握手、显示传感器、使用独立调试指令；准备、联动抓取和折叠会按所需标定返回NOT_CALIBRATED。不能把测试用的100/150 ms或0 ms写入正式配置冒充实测值。135°预设也需在实际机构上确认方向。
-
-## 传感器与记录
-
-- MANUAL、VISION_DEMO约20 Hz ACC；VISION_PICK停传无线传感器流，内部IMU继续采样。
-- STATE由GET STATE查询，PC约每秒查询；阶段变化使用MOTION，不高频刷状态。
-- 普通MOVE/PICK可沿用RTT的完整200 Hz实验窗口；准备/折叠低速宏动作不混作普通高速出臂试次。
-- 无线20 Hz显示不等于200 Hz存盘，RECORD ON和DONE也不代表文件已经保存。
-
-## 测试
-
-```powershell
 .\tools\test_hc13_host.ps1
-$env:HC13_NATIVE_PEER_EXE='C:\Users\Vincent Lu\Desktop\gitcode\AerialRoboArm\outputs\hc13_host_tests\test_hc13_host.exe'
-Set-Location 'C:\Users\Vincent Lu\Downloads\desktop_app'
-py -3.11 -m unittest discover -s tests -v
 ```
 
-原生测试直接编译实际C模块，覆盖准备顺序、标定拒绝、采样跨阈值、一次闭爪、普通MOVE不闭爪、候选/触发、STOP及MODE取消、故障、发送背压和请求去重。
+要求CMake、Ninja、Arm GNU工具链；原生测试要求GCC（脚本查PATH或已知CLion路径）。脚本配置`HX8_JY60_CAPTURE=ON`、`JY61P_CAPTURE=ON`、`HC13_HOST_LINK=ON`、`JY61P_DIAGNOSTIC=OFF`，产物为`cmake-build-hc13-host/FOC_DEMO2.elf/.hex/.bin`，只编译不烧录。
 
-`tests/test_current_mcu_v2.py` 把真实上位机控制器通过模拟串口连接到实际C模块，不另造一份Python控制逻辑。测试端使用明确的模拟等待时间；另有未标定场景验证正式默认的拦截。全部HAL/执行器均模拟，不能代替实机联调。
+`main.c`进入`App_Hx8Jy60Capture_Run()`主循环。USART1接JY61P、USART2接HX8、USART3接HC13；详见[接线表](pinmap.md)。上电不自动归零或启动夹爪PWM，显式指令才应用PWM。机构控制使用HC13 V2，旧RTT `g/p`命令不是此构建的控制入口。
 
-上位机还修正了NORMAL流程收到READY后又被DONE错误清除准备状态的问题，并在独立夹爪/移动命令后同步取消旧READY。
+## 只读通信检查
 
-## 待实机工作
+电脑选择实际HC13串口，230400、8N1、无流控；打开前关闭DTR/RTS。同一端口只能由一个程序占用。先读取INFO/CAL/STATE，再确认PING/PONG，不能仅凭收到ACC就认为所有控制路径成功。
 
-本次没有烧录。后续先核对HC13电平、模块参数和INFO/CAL/STATE/ACC；再测开闭爪等待时间、确认135°/90°对应关系及后折位置；最后由用户明确启动机构动作。真实图传已有PC采集入口，泡沫识别算法仍需单独接入，不能把有图像当作已有抓取目标。
+```text
+GET,101,INFO
+GET,102,CAL
+GET,103,STATE
+PING,104
+```
+
+发送示例以LF结束。读到匹配请求编号的回复才算本次查询往返成功；COM号不固定。裸`ERROR`不是V2的`ERR,id,code`，应检查选错端口、模块模式或串口控制线状态。
+
+## 手动控制与超时恢复
+
+```text
+MOVE,105,-30000,100
+GRIP,106,OPEN
+GRIP,107,CLOSE
+STOP,108
+GET,109,STATE
+```
+
+以上只是格式示例，不是自动测试序列。MOVE是−30°、100°/s，需MANUAL和设备就绪；GRIP使用MCU配置角度；STOP尝试停止并保持。动作需按实际机构条件由操作者明确发起。上位机“低速归零”目前发送`MOVE,id,0,30`，是普通限位内运动，不是独立采集固件的越界恢复`h`。
+
+MOVE接收ACK后仍需等待DONE/故障及实际角度。运动超时会留下故障状态，上位机不能只清除报错；恢复复用STOP，由MCU检查反馈，并在ACK后重新GET STATE确认。不会自动重发旧动作或归零，底层问题未消失时仍可能失败。PWM的APPLIED仅说明已设置命令。
+
+## 联动流程与未知标定
+
+配置位于`User/app/Inc/app_hc13_host_config.h`：竖直位0°，张开135°、闭合90°，提前量4°；开闭爪等待时间−1、后折位置未标定，对外NA。
+
+HOME/PREP/NORMAL、PICK/TRIGGER和折叠依赖各自标定，不把测试模拟值写成实测参数。MODE只切路由，不自动开爪；V以毫度存候选，不直接驱动主臂。正式控制的度单位持续跟随V不能用于此处。完整格式见[协议V2](HC13_HOST_PROTOCOL_V2.md)。
+
+## 采集和验证边界
+
+内部IMU目标200Hz，MANUAL/VISION_DEMO无线ACC约20Hz，VISION_PICK停发无线ACC但内部采样继续。RTT1经9091读取完整采样；需运行`tools/capture_hx8_jy60.py`等采集工具并检查生成文件。RECORD ON、ACC或DONE都不保证电脑记录完整。
+
+现有软件测试和构建已通过，历史烧录校验、双向查询和ACC接收有记录；未据此认定全部机械动作/抓取成功。外部电脑上位机和识别模型不在此MCU仓库，曾分发的修改版为`desktop_app_wireless_20261101`，对接时仍须核对实际启动目录及协议版本。

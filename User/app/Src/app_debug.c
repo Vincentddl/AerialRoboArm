@@ -2,9 +2,7 @@
  * @file app_debug.c
  * @brief L5 DebugTask: Console input, DataHub status dump, LED render.
  *
- * Minimal skeleton for demo_v7. Existing richer menu logic in the legacy
- * app_testbench.c remains in the tree (compiled out via CMake EXCLUDE in a
- * later phase) to serve as reference while this file grows.
+ * Processes RTT console requests, reports DataHub state and renders status IO.
  */
 
 #include "app_debug.h"

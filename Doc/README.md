@@ -1,50 +1,33 @@
-# Documentation Index
+# 项目文档导航
 
-This directory contains the curated documentation for the AerialRoboArm electrical-control subsystem. The repository does not include the undergraduate thesis document itself; these files provide the engineering context, contribution boundary, runtime architecture, hardware notes, demo notes, and historical archive.
+请先选择当前使用的固件链路。本文档只把现行实现列为主入口，历史规划不再作为使用说明。
 
-## Primary Documents
+## 正式控制：ELRS手动＋电脑视觉目标
 
-| Document | Purpose |
-| --- | --- |
-| [MY_WORK.md](./MY_WORK.md) | Personal contribution boundary and work summary. |
-| [design/06_CONTROL_SYSTEM_REPLAN.md](./design/06_CONTROL_SYSTEM_REPLAN.md) | Control-system replan: RC/vision inputs, HX8/FSUS main-arm control, PWM gripper, task timing, arbitration, and safety. |
-| [design/07_MONOCULAR_VISION_GRASP_PLAN.md](./design/07_MONOCULAR_VISION_GRASP_PLAN.md) | Detailed monocular vision and three-frame grasp plan: hardware, formulas, measured PC timing, conditional latency budget, comparisons, and validation. |
-| [About AI Assist Pipeline - Share.md](./About%20AI%20Assist%20Pipeline%20-%20Share.md) | DACMAS AI-native development workflow and methodology. |
-| [hardware/pinmap.md](./hardware/pinmap.md) | STM32 pin assignment and external wiring reference. |
-| [hardware/JY60_IMU.md](./hardware/JY60_IMU.md) | JY60 supply, UART protocol, measurement limits and source discrepancies; not used for arm control yet. |
-| [hardware/JY61P_CAPTURE.md](./hardware/JY61P_CAPTURE.md) | JY61P 200 Hz on former ELRS USART1: startup configuration, rate checks, wiring and capture. |
-| [hardware/JY60_UART_DEMO.md](./hardware/JY60_UART_DEMO.md) | Sensor-only JY60 demo using the former ELRS USART1 connector, flash/RTT instructions and hardware verification. |
-| [hardware/HX8_JY60_CAPTURE.md](./hardware/HX8_JY60_CAPTURE.md) | Synchronized HX8 command and JY60 recording: VOFA 9090, capture 9091, MCU timestamps, automatic start/end. |
-| [hardware/HC13_HOST_PROTOCOL_V2.md](./hardware/HC13_HOST_PROTOCOL_V2.md) | Current unified HC13 V2: preparation, one-shot linked pick, candidate/trigger semantics, telemetry and calibration guards. Compiled/software-tested; not flashed. |
-| [hardware/HC13_HOST_PROTOCOL_V1.md](./hardware/HC13_HOST_PROTOCOL_V1.md) | Historical V1 contract; incompatible with the current V2 host build. |
-| [hardware/HC13_HOST_BUILD.md](./hardware/HC13_HOST_BUILD.md) | Build and test the unified USART3 HC13 host firmware; configured poses, known limits and no-flash validation. |
-| [hardware/vl53l1x_grasp_gate.md](./hardware/vl53l1x_grasp_gate.md) | VL53L1X wiring and gripper gate notes for the active I2C distance-sensor path. |
-| [hardware/vl53l0x_tof.md](./hardware/vl53l0x_tof.md) | Superseded GY-VL53L0X bring-up notes retained for rollback. |
-| [demo/final-demo.md](./demo/final-demo.md) | Final `demo_v6` demo/testbench scope and media entry points. |
-| [design/02_BUS_SERVO_CONTROL_MODEL.md](./design/02_BUS_SERVO_CONTROL_MODEL.md) | Control-theory modeling process for the HX8/FSUS bus-servo path. |
-| [design/03_VISION_PERCEPTION_MODULE.md](./design/03_VISION_PERCEPTION_MODULE.md) | Vision perception module plan for lens calibration, target recognition, and base-relative offset estimation. |
-| [design/04_Z_AXIS_TRAJECTORY_FEASIBILITY_PLAN.md](./design/04_Z_AXIS_TRAJECTORY_FEASIBILITY_PLAN.md) | Feasibility plan, validation gates, and rollout criteria for Z-axis-constrained target prediction and grasping. |
+1. [系统架构、任务与模式](design/CURRENT_SYSTEM.md)：职责边界、MANUAL/AUTO、安全与反馈。
+2. [实际接线](hardware/pinmap.md)：三路UART、PWM、测距及SWD。
+3. [自动模式与视觉目标格式](hardware/AUTO_PICK_SEQUENCE.md)：持续跟随、CH4夹爪、可选三帧配置。
+4. [启动角度保护](hardware/HX8_STARTUP_ANGLE_GUARD.md)、[位置微调](hardware/HX8_POSITION_TRIM.md)：正式控制的执行监督。
+5. [控制台调试](hardware/VOFA_MANUAL_WITHOUT_ELRS.md)、[RTT日志](hardware/RTT_LOG_MODES.md)：正式程序调试入口。
 
-## Archived / Historical Documents
+## 无线调试：HC13 V2＋HX8＋JY61P
 
-| Document | Archive reason |
-| --- | --- |
-| [design/00_SYSTEM_CONSTITUTION.md](./design/00_SYSTEM_CONSTITUTION.md) | Older BLDC/AS5600 design narrative; retained for thesis/history context. |
-| [design/01_RUNTIME_ARCHITECTURE.md](./design/01_RUNTIME_ARCHITECTURE.md) | Older dual-thread BLDC/AS5600 runtime architecture; current bring-up uses HX8/FSUS + PTK. |
-| [hardware/cubemx-demo-v7-checklist.md](./hardware/cubemx-demo-v7-checklist.md) | Old ST3215 half-duplex CubeMX checklist; current chain is STM32 USART2 -> UC-01 -> HX8-U26H-M. |
+1. [V2构建与对接](hardware/HC13_HOST_BUILD.md)：编译、接入、查询、动作和恢复边界。
+2. [V2完整协议](hardware/HC13_HOST_PROTOCOL_V2.md)：ASCII帧、单位、回执与状态字段。
+3. [JY61P配置与采集](hardware/JY61P_CAPTURE.md)：模块设置、速率检查、原始记录。文内旧RTT运动命令只适用于独立采集构建。
+4. [同步采集格式](hardware/HX8_JY60_CAPTURE.md)：记录文件和事件语义。
 
-## Directory Layout
+## 硬件和专项工具
 
-```text
-Doc/
-  README.md              Documentation index
-  MY_WORK.md             Personal contribution summary
-  design/                Formal architecture and design documents
-  hardware/              Pin map and hardware-context assets
-  demo/                  Final demo/testbench notes
-  archive/               Historical notes, drafts, legacy assets, and mirrored vendor files
-```
+- [HC13配置](hardware/hc13_config.md)：两端参数及半双工约束。
+- [DAPLink/RTT排障](hardware/rtt_boot_troubleshooting.md)：日志访问与启动检查。
+- [SERVO1独立调试](hardware/SERVO1_ONLY_TEST.md)、[JY61P诊断](hardware/JY61P_DIAGNOSTIC.md)、[JY60资料](hardware/JY60_IMU.md)、[JY60独立读取](hardware/JY60_UART_DEMO.md)：仅在选择相应构建时使用。
+- [VL53L1X](hardware/vl53l1x_grasp_gate.md)：正式构建的测距快照任务，不能据此声称测距已参与所有抓取准入。
+- [HX8模型研究](design/02_BUS_SERVO_CONTROL_MODEL.md)：建模参考，不是现行固件参数规范。
+- [通信时延测法](hardware/HC13_LATENCY_TEST.md)：专用诊断试验，不等于整机控制时延。
 
-## Archive Policy
+## 数据与维护
 
-`archive/` keeps development-history materials that are useful for traceability but should not be treated as the current project entrance. This includes meeting notes, branch retrospectives, early protocol drafts, legacy figures, and the duplicated `Doc/Drivers` mirror that previously lived directly under `Doc/`.
+相机识别、角度标定和上位机是外部电脑项目。原始数据在本机`outputs/`，不随Git代码上传；`Figures/DEMO`等历史演示不直接作为当前构建实测证据。
+
+2026-11-06清理记录见[历史文件清理](MAINTENANCE_CLEANUP_20261106.md)。已移除过时BLDC/AS5600文档、旧V1协议、重复方案和设计草案；更早版本可从Git历史恢复，未重写提交历史。

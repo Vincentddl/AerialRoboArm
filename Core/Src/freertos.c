@@ -28,7 +28,6 @@
 #include "stdio.h"
 #include "bsp_uart.h"
 #include "task_motion.h"   // [添加]
-#include "test_rc_console.h"
 #include <math.h> // 用于测试浮点打印
 
 /* demo_v7 app-layer entries */
