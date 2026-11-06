@@ -124,6 +124,12 @@ uint16_t BSP_UART_HC13_ReadRaw(uint8_t *data, uint16_t len);
  * @brief Send bytes out through USART3 to the MCU-side HC13 module.
  */
 void BSP_UART_HC13_Send(const uint8_t *data, uint16_t len);
+#if defined(HC13_HOST_LINK)
+/* Copy one complete line into a persistent IT-TX slot. Busy never blocks. */
+AraStatus_t BSP_UART_HC13_TrySend(const uint8_t *data,uint16_t len);
+AraStatus_t BSP_UART_HC13_EnsureRxArmed(void);
+uint32_t BSP_UART_HC13_GetRxOverflows(void);
+#endif
 
 /**
  * @brief Bring-up diagnostics: number of circular RX DMA restarts after UART

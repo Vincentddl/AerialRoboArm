@@ -106,6 +106,10 @@ int main(void)
   MX_DMA_Init();
   MX_USART1_UART_Init();
   MX_USART2_UART_Init();
+#if defined(HC13_HOST_LINK)
+  MX_USART3_UART_Init();
+  MX_TIM2_Init(); /* PWM remains stopped until an explicit host command. */
+#endif
   MX_IWDG_Init();
   App_Hx8Jy60Capture_Run();
 #elif defined(JY60_UART_DEMO)

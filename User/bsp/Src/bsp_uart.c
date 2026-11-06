@@ -63,6 +63,11 @@ static uint8_t  s_hc13_raw_buf[UART_HC13_RAW_BUF_SIZE];
 static volatile uint16_t s_hc13_raw_head = 0U;  /* ISR writes */
 static uint16_t s_hc13_raw_tail = 0U;           /* task reads */
 static uint8_t  s_hc13_rx_byte;                 /* 1-byte IT target */
+#if defined(HC13_HOST_LINK)
+static uint8_t s_hc13_tx_frame[162];
+static volatile uint32_t s_hc13_rx_overflows;
+static uint32_t s_hc13_tx_start_ms;
+#endif
 /* Long periodic snapshots include HC13/vision counters and exceed 128 bytes.
  * Keep enough room for one complete line so diagnostics do not truncate. */
 static char s_debug_tx_buf[256];        /* DebugTask-only RTT formatting buffer. */
@@ -251,7 +256,7 @@ void BSP_UART_Init(void)
 
     /* 4. Start interrupt-based RX on USART3 (HC13).
      *     One byte per interrupt, pushed directly into the HC13 parser FIFO. */
-#if !defined(HX8_JY60_CAPTURE)
+#if !defined(HX8_JY60_CAPTURE) || defined(HC13_HOST_LINK)
     HAL_UART_Receive_IT(&huart3, &s_hc13_rx_byte, 1);
 #endif
 
@@ -510,7 +515,9 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
 
     /* HC13 (USART3): forward transparent-mode bytes to drv_hc13. */
     if (huart == uart_ctx[BSP_UART_HC13].huart) {
+#if !defined(HC13_HOST_LINK)
         DrvHC13_PushRxByte(s_hc13_rx_byte);
+#endif
 #if HC13_IRQ_ECHO_ENABLE
         HC13_IrqEchoConsumeByte(s_hc13_rx_byte);
 #endif
@@ -519,6 +526,9 @@ void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
             s_hc13_raw_buf[s_hc13_raw_head] = s_hc13_rx_byte;
             s_hc13_raw_head = next;
         }
+#if defined(HC13_HOST_LINK)
+        else s_hc13_rx_overflows++;
+#endif
         s_hc13_rx_bytes++;
         HAL_UART_Receive_IT(huart, &s_hc13_rx_byte, 1);
         return;
@@ -570,6 +580,10 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
 
     /* HC13 (USART3): re-arm single-byte RX after noise/framing/overrun. */
     if (huart == uart_ctx[BSP_UART_HC13].huart) {
+#if defined(HC13_HOST_LINK)
+        s_hc13_rx_overflows++; /* Invalidate partial commands after UART errors. */
+        (void)HAL_UART_AbortReceive(huart);
+#endif
         HAL_UART_Receive_IT(huart, &s_hc13_rx_byte, 1);
         return;
     }
@@ -687,6 +701,25 @@ void BSP_UART_HC13_Send(const uint8_t *data, uint16_t len)
     }
     (void)HAL_UART_Transmit(&huart3, (uint8_t *)data, len, UART_TX_TIMEOUT_MS);
 }
+#if defined(HC13_HOST_LINK)
+AraStatus_t BSP_UART_HC13_TrySend(const uint8_t *data,uint16_t len)
+{
+    if (!data || !len || len>sizeof(s_hc13_tx_frame)) return ARA_ERR_PARAM;
+    if (huart3.gState!=HAL_UART_STATE_READY) {
+        if (HAL_GetTick()-s_hc13_tx_start_ms<100U) return ARA_BUSY;
+        (void)HAL_UART_AbortTransmit(&huart3);
+    }
+    memcpy(s_hc13_tx_frame,data,len);
+    s_hc13_tx_start_ms=HAL_GetTick();
+    return HAL_UART_Transmit_IT(&huart3,s_hc13_tx_frame,len)==HAL_OK ? ARA_OK:ARA_ERR_IO;
+}
+AraStatus_t BSP_UART_HC13_EnsureRxArmed(void)
+{
+    if (huart3.RxState==HAL_UART_STATE_BUSY_RX) return ARA_OK;
+    return HAL_UART_Receive_IT(&huart3,&s_hc13_rx_byte,1)==HAL_OK?ARA_OK:ARA_ERR_IO;
+}
+uint32_t BSP_UART_HC13_GetRxOverflows(void) { return s_hc13_rx_overflows; }
+#endif
 
 uint32_t BSP_UART_Elrs_GetRxBytes(void)
 {

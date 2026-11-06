@@ -13,6 +13,16 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
+#if defined(HC13_HOST_LINK)
+#include "mod_hc13_host.h"
+#include "app_hc13_host_config.h"
+#include "tim.h"
+static Hc13Host_t host;
+static bool host_target_valid,host_pwm_started;
+static uint16_t host_acc_hz;
+static uint32_t host_rx_overflows;
+static uint32_t host_settled_since_ms;
+#endif
 
 static Jy60Parser_t imu;
 static FsusFeedback_t fb;
@@ -38,7 +48,11 @@ static uint8_t line_len;
 static bool line_overflow;
 #if defined(JY61P_CAPTURE)
 /* About 45 kB/s of text at 600 IMU packets/s: buffer short host stalls. */
+#if defined(HC13_HOST_LINK)
+static char trace_buffer[4096]; /* Leave RAM for the host response/cache queues. */
+#else
 static char trace_buffer[8192];
+#endif
 static bool imu_rate_ok;
 static uint32_t rate_acc,rate_gyro,rate_angle;
 static void emit(const char *fmt,...);
@@ -157,6 +171,11 @@ static void finish(const char *reason,uint32_t now,bool stop)
             (unsigned long)command_id,(unsigned long)now,reason,
             (unsigned long)(drops-drop_baseline),(unsigned long)(imu.checksum_errors-checksum_baseline),
             (unsigned long)imu_seq,(unsigned long)hx_seq,(unsigned long)(BSP_UART_RxDma_GetRecoveries()-uart_baseline));
+#if defined(HC13_HOST_LINK)
+    HostError_t host_reason=!strcmp(reason,"complete")?HOST_OK:!strcmp(reason,"operator_stop")?HOST_STOPPED:
+        !strcmp(reason,"motion_timeout")?HOST_MOTION_TIMEOUT:!strcmp(reason,"tx_failed")?HOST_TX_FAILED:HOST_FEEDBACK_STALE;
+    ModHc13Host_MotionFinished(&host,host_reason,now,(int32_t)lroundf(fb.angle_deg*1000.0f));
+#endif
     manual_move_active=false;
     recovery_active=false;recovery_ready=false;ModStartupAngle_Reset(&recovery_gate);
     phase=0;ready=false;ModStartupAngle_Reset(&gate);
@@ -178,13 +197,26 @@ static void on_feedback(uint32_t now)
     if (phase!=1) return;
     bool quiet=previous_angle_valid && fabsf(fb.angle_deg-previous_angle)<=0.3f;
     previous_angle=fb.angle_deg;previous_angle_valid=true;
-    if (fabsf(fb.angle_deg-target)<=(recovery_active ? 0.5f : 1.0f) && quiet) { if (settled<5) settled++; }
+    if (fabsf(fb.angle_deg-target)<=(recovery_active ? 0.5f : 1.0f) && quiet) {
+#if defined(HC13_HOST_LINK)
+        if (!settled) host_settled_since_ms=now;
+#endif
+        if (settled<5) settled++;
+    }
     else settled=0;
-    /* Five fresh 50 ms observations; never count cached values. */
-    if (settled>=5) {
+    /* Never count cached values. Faster PICK polling must not shorten the
+     * historical ~200 ms quiet confirmation interval to merely 20 ms. */
+    bool confirmed=settled>=5;
+#if defined(HC13_HOST_LINK)
+    if (host.flow==HOST_FLOW_PICK) confirmed=confirmed && now-host_settled_since_ms>=200U;
+#endif
+    if (confirmed) {
         phase=2;arrived_ms=now;
         emit("[CAP] %s id=%lu t_ms=%lu angle_mdeg=%ld\r\n",recovery_active ? "RECOVERY_ARRIVED" : manual_move_active ? "MANUAL_ARRIVED" : "ARRIVED",
              (unsigned long)command_id,(unsigned long)now,(long)(fb.angle_deg*1000));
+#if defined(HC13_HOST_LINK)
+        ModHc13Host_MotionArrived(&host,now,(int32_t)lroundf(fb.angle_deg*1000.0f));
+#endif
     }
 }
 static void monitor(uint32_t now)
@@ -198,7 +230,11 @@ static void monitor(uint32_t now)
         }
         if (query_pending && now-poll_ms>=25U) query_pending=false;
     }
-    if (query_pending || now-poll_ms<50U) return;
+    uint32_t period=50U;
+#if defined(HC13_HOST_LINK)
+    if (phase==1U) period=ModHc13Host_FeedbackPeriod(&host);
+#endif
+    if (query_pending || now-poll_ms<period) return;
     uint8_t tx[FSUS_TX_BUF_SIZE];uint16_t n=DrvFsus_EncodeServoMonitor(tx,0);
     poll_ms=now;reply_len=0;
     if (BSP_UART_Fsus_EnsureRxArmed()!=ARA_OK) return;
@@ -311,6 +347,117 @@ static void command(uint32_t now)
     } else { emit("[CAP] REJECT reason=bad_setting\r\n");return; }
     emit("[CAP] CONFIG speed=%u ramp_ms=%u post_ms=%lu\r\n",speed,ramp,(unsigned long)post_ms);
 }
+#if defined(HC13_HOST_LINK)
+static void host_snapshot(HostSnapshot_t *s,uint32_t now)
+{
+    s->hx_online=have_fb && now-last_fb_ms<200U && isfinite(fb.angle_deg);
+    s->hx_healthy=hx_feedback_healthy(now);s->ready=ready;s->recovery_ready=recovery_ready;
+    s->imu_online=imu.acceleration.count && now-imu.acceleration.timestamp_ms<250U;
+    s->imu_ready=imu_live(now);s->record_on=!manual_mode;s->target_valid=host_target_valid;
+    s->phase=phase;s->pos_mdeg=s->hx_online?(int32_t)lroundf(fb.angle_deg*1000.0f):0;
+    s->target_mdeg=(int32_t)lroundf(target*1000.0f);s->voltage_mv=s->hx_online?(uint16_t)fb.voltage_mv:0;
+    s->imu_hz=host_acc_hz;s->acc_count=imu.acceleration.count;s->acc_ms=imu.acceleration.timestamp_ms;
+    s->motion_start_ms=start_ms;
+    s->feedback_seq=hx_seq;
+    for (unsigned i=0;i<3U;i++) s->acc_mg[i]=imu.acceleration.milli[i];
+}
+static HostError_t host_stop(uint32_t now)
+{
+    uint8_t tx[FSUS_TX_BUF_SIZE];uint16_t n=DrvFsus_EncodeStop(tx,0,FSUS_STOP_MODE_HOLD,0);
+    bool sent=n && BSP_UART_Fsus_Send(tx,n)==ARA_OK;
+    if (phase) finish(sent?"operator_stop":"tx_failed",now,false);
+    ready=false;ModStartupAngle_Reset(&gate);
+    if (!sent) return HOST_TX_FAILED;
+    return hx_feedback_healthy(now)?HOST_OK:HOST_HX8_OFFLINE;
+}
+static HostError_t host_servo(int32_t mdeg)
+{
+    if (mdeg<0 || mdeg>180000 || mdeg%1000) return HOST_OUT_OF_RANGE;
+    uint16_t degrees=(uint16_t)(mdeg/1000);
+    uint16_t pulse=degrees<=90U ? (uint16_t)(500U+degrees*34U/3U) :
+        (uint16_t)(1520U+(degrees-90U)*98U/9U);
+    /* Load the requested pulse BEFORE starting the first PWM frame. */
+    __HAL_TIM_SET_COMPARE(&htim2,TIM_CHANNEL_1,pulse);
+    if (!host_pwm_started) {
+        if (HAL_TIM_PWM_Start(&htim2,TIM_CHANNEL_1)!=HAL_OK) return HOST_FAULT;
+        host_pwm_started=true;
+    }
+    return HOST_OK;
+}
+static HostError_t host_record(bool enabled)
+{
+    if (phase) return HOST_BUSY;
+    manual_mode=!enabled;mode_pending=false;
+    emit("[CAP] MODE mode=%s record=%u imu_required=%u action=host_record_switch\r\n",
+        enabled?"CAPTURE":"MANUAL_HX8",enabled,enabled);
+    return HOST_OK;
+}
+static bool host_send(const char *text,size_t length)
+{ return BSP_UART_HC13_TrySend((const uint8_t *)text,(uint16_t)length)==ARA_OK; }
+static HostError_t host_move(int32_t mdeg,uint16_t velocity,HostVerb_t kind,uint32_t now)
+{
+    bool home=kind==HOST_HOME,pick=kind==HOST_PICK;
+    if (kind!=HOST_MOVE && kind!=HOST_HOME && kind!=HOST_SHAPE && kind!=HOST_PICK) return HOST_UNSUPPORTED;
+    if (phase) return HOST_BUSY;
+    if (!hx_feedback_healthy(now)) return HOST_HX8_OFFLINE;
+    if (!home && (mdeg< -90000 || mdeg>85000)) return HOST_OUT_OF_RANGE;
+    if (!velocity || velocity>500U) return HOST_OUT_OF_RANGE;
+    if (home ? !recovery_ready : (!pick && !ready)) return HOST_NOT_READY;
+    if (!home && !hx_healthy(now)) return HOST_NOT_READY;
+    if (!home && kind!=HOST_SHAPE && !manual_mode && !imu_live(now)) return HOST_IMU_RATE_LOW;
+    uint16_t motion_ramp=(home || kind==HOST_SHAPE)?500U:ramp;
+    uint8_t tx[FSUS_TX_BUF_SIZE];
+    uint16_t n=DrvFsus_EncodeSetAngleByVelocity(tx,0,(float)mdeg/1000.0f,(float)velocity,motion_ramp,motion_ramp,0);
+    query_pending=false;BSP_UART_Fsus_Flush();
+    if (!n || BSP_UART_Fsus_Send(tx,n)!=ARA_OK) return HOST_TX_FAILED;
+    start_ms=BSP_UART_Fsus_GetLastTxStartMs();target=(float)mdeg/1000.0f;host_target_valid=true;
+    command_id++;settled=0;previous_angle_valid=false;phase=1;
+    recovery_active=home;recovery_start=fb.angle_deg;
+    manual_move_active=manual_mode || home || kind==HOST_SHAPE;drop_baseline=drops;checksum_baseline=imu.checksum_errors;
+    uart_baseline=BSP_UART_RxDma_GetRecoveries();
+    if (home) emit("[CAP] RECOVERY_START id=%lu t_ms=%lu from_mdeg=%ld target_mdeg=%ld speed=30 acc_ms=500 dec_ms=500 record=OFF\r\n",
+        (unsigned long)command_id,(unsigned long)start_ms,(long)(fb.angle_deg*1000),(long)mdeg);
+    else if (manual_mode) emit("[CAP] MANUAL_START id=%lu t_ms=%lu target_mdeg=%ld speed=%u acc_ms=%u dec_ms=%u record=OFF\r\n",
+        (unsigned long)command_id,(unsigned long)start_ms,(long)mdeg,velocity,motion_ramp,motion_ramp);
+    else {
+        request_id++;
+        emit("[CAP] REQUEST request_id=%lu t_ms=%lu target_mdeg=%ld\r\n",(unsigned long)request_id,(unsigned long)start_ms,(long)mdeg);
+        emit("[CAP] START id=%lu request_id=%lu t_ms=%lu tx_end_ms=%lu target_mdeg=%ld speed=%u acc_ms=%u dec_ms=%u post_ms=%lu imu_seq=%lu hx_seq=%lu\r\n",
+            (unsigned long)command_id,(unsigned long)request_id,(unsigned long)start_ms,(unsigned long)HAL_GetTick(),(long)mdeg,
+            velocity,motion_ramp,motion_ramp,(unsigned long)post_ms,(unsigned long)imu_seq,(unsigned long)hx_seq);
+    }
+    return HOST_OK;
+}
+static uint32_t host_boot_id(void)
+{
+    /* Backup counter survives MCU resets; cycle timing adds variation on cold
+     * starts. This is a session identifier, not a cryptographic random number. */
+    __HAL_RCC_PWR_CLK_ENABLE();__HAL_RCC_BKP_CLK_ENABLE();HAL_PWR_EnableBkUpAccess();
+    uint32_t counter=((BKP->DR2&0xFFFFU)<<16)|(BKP->DR1&0xFFFFU);counter++;
+    BKP->DR1=counter&0xFFFFU;BKP->DR2=counter>>16;HAL_PWR_DisableBkUpAccess();
+    const uint32_t *uid=(const uint32_t *)0x1FFFF7E8UL;
+    return (counter*2654435761UL)^uid[0]^DWT->CYCCNT^HAL_GetTick();
+}
+static void host_init(void)
+{
+    const HostConfig_t cfg={.vertical_mdeg=HOST_VERTICAL_MDEG,
+        .folded_mdeg=HOST_FOLD_MDEG,.grip_open_mdeg=HOST_GRIP_OPEN_MDEG,.grip_close_mdeg=HOST_GRIP_CLOSE_MDEG,
+        .fold_calibrated=HOST_FOLD_CALIBRATED,.grip_calibrated=HOST_GRIP_CONFIGURED,
+        .open_wait_calibrated=HOST_OPEN_WAIT_MS>=0,.close_wait_calibrated=HOST_CLOSE_WAIT_MS>=0,
+        .open_wait_ms=HOST_OPEN_WAIT_MS>=0?HOST_OPEN_WAIT_MS:0,.close_wait_ms=HOST_CLOSE_WAIT_MS>=0?HOST_CLOSE_WAIT_MS:0,
+        .default_lead_mdeg=HOST_DEFAULT_LEAD_MDEG,
+        .extension_sign=HOST_EXTENSION_SIGN,.max_extension_mdeg=HOST_MAX_EXTENSION_MDEG,
+        .max_speed=500,.ramp_ms=100,.post_ms=1000,.min_confidence=HOST_VISION_MIN_CONFIDENCE};
+    const HostHooks_t hooks={.snapshot=host_snapshot,.move=host_move,.stop=host_stop,.servo=host_servo,
+        .record=host_record,.send=host_send};
+    ModHc13Host_Init(&host,&cfg,&hooks,host_boot_id(),HAL_GetTick());
+    /* Discard commands accumulated during sensor startup/configuration.
+     * The PC queries again; an old queued actuator request must not start here. */
+    uint8_t discarded[64];
+    while (BSP_UART_HC13_ReadRaw(discarded,sizeof(discarded))) { }
+    host_rx_overflows=BSP_UART_HC13_GetRxOverflows();
+}
+#endif
 void App_Hx8Jy60Capture_Run(void)
 {
     SEGGER_RTT_Init();
@@ -320,10 +467,17 @@ void App_Hx8Jy60Capture_Run(void)
 #else
     (void)SEGGER_RTT_ConfigUpBuffer(1,"capture",trace_buffer,sizeof(trace_buffer),SEGGER_RTT_MODE_NO_BLOCK_SKIP);
     DrvJy60_Init(&imu);ModStartupAngle_Reset(&gate);BSP_UART_Init();
+#if defined(HC13_HOST_LINK)
+    CoreDebug->DEMCR|=CoreDebug_DEMCR_TRCENA_Msk;DWT->CTRL|=DWT_CTRL_CYCCNTENA_Msk;
+    emit("[CAP] HOST build=HC13_V2 usart3=230400 pwm=DEFERRED rtt=READONLY\r\n");
+#endif
 #if defined(JY61P_CAPTURE)
     emit("[CAP] BOOT firmware=HX8_JY61P_CAPTURE imu=JY61P baud=115200 requested_hz=200 record=0 pwm=OFF autohome=OFF\r\n");
     bool configured=imu_configure();
     emit("[CAP] IMU_CONFIG verified=%u requested_baud=115200 requested_hz=200\r\n",configured);
+#if defined(HC13_HOST_LINK)
+    host_init();
+#endif
 #else
     emit("[CAP] BOOT firmware=HX8_JY60_CAPTURE jy60=USART1_9600 hx8=USART2_115200 record=0 pwm=OFF autohome=OFF\r\n");
 #endif
@@ -346,6 +500,20 @@ void App_Hx8Jy60Capture_Run(void)
                     (long)v->milli[0],(long)v->milli[1],(long)v->milli[2],v->tail_raw);
             }
         }
+#if defined(HC13_HOST_LINK)
+        (void)BSP_UART_HC13_EnsureRxArmed();
+        uint32_t overflows=BSP_UART_HC13_GetRxOverflows();
+        if (overflows!=host_rx_overflows) {
+            host_rx_overflows=overflows;
+            while (BSP_UART_HC13_ReadRaw(bytes,sizeof(bytes))) { }
+            ModHc13Host_InputLost(&host,HAL_GetTick());
+        }
+        while ((count=BSP_UART_HC13_ReadRaw(bytes,sizeof(bytes)))!=0)
+            ModHc13Host_Receive(&host,bytes,count,HAL_GetTick());
+        monitor(HAL_GetTick()); /* Process STOP/MODE before fresh-frame closure decisions. */
+        /* Consume old console input without executing it in unified-host mode. */
+        uint8_t ignored_keys[32];(void)SEGGER_RTT_Read(0,ignored_keys,sizeof(ignored_keys));
+#else
         monitor(now);
         uint8_t keys[32];unsigned n=SEGGER_RTT_Read(0,keys,sizeof(keys));
         for (unsigned i=0;i<n;i++) {
@@ -361,14 +529,24 @@ void App_Hx8Jy60Capture_Run(void)
             } else if (line_len<sizeof(line)-1) line[line_len++]=(char)keys[i];
             else line_overflow=true;
         }
+#endif
         now=HAL_GetTick();
         if (phase && (!hx_healthy(now) || (!manual_move_active && !imu_live(now)))) finish("feedback_timeout_or_fault",now,true);
         else if (phase==1 && now-start_ms>10000U) finish("motion_timeout",now,true);
-        else if (phase==2 && now-arrived_ms>=post_ms) finish("complete",now,false);
+        else if (phase==2 && now-arrived_ms>=
+#if defined(HC13_HOST_LINK)
+                 (manual_move_active?0U:post_ms)
+#else
+                 post_ms
+#endif
+                 ) finish("complete",now,false);
         if (now-heartbeat>=1000U) {
 #if defined(JY61P_CAPTURE)
             uint32_t elapsed=now-heartbeat;
             uint32_t acc_hz=(imu.acceleration.count-rate_acc)*1000U/elapsed;
+#if defined(HC13_HOST_LINK)
+            host_acc_hz=(uint16_t)acc_hz;
+#endif
             uint32_t gyro_hz=(imu.gyro.count-rate_gyro)*1000U/elapsed;
             uint32_t angle_hz=(imu.angle.count-rate_angle)*1000U/elapsed;
             imu_rate_ok=acc_hz>=180U && acc_hz<=220U && gyro_hz>=180U && gyro_hz<=220U && angle_hz>=180U && angle_hz<=220U;
@@ -385,6 +563,9 @@ void App_Hx8Jy60Capture_Run(void)
                 have_fb ? fb.voltage_mv : 0,(unsigned long)BSP_UART_Fsus_GetTxBytes(),
                 (unsigned long)BSP_UART_Fsus_GetRxBytes(),(unsigned long)imu.checksum_errors,(unsigned long)drops);
         }
+#if defined(HC13_HOST_LINK)
+        ModHc13Host_Poll(&host,HAL_GetTick());
+#endif
     }
 #endif
 }

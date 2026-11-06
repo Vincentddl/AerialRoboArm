@@ -15,7 +15,9 @@ This directory contains the curated documentation for the AerialRoboArm electric
 | [hardware/JY61P_CAPTURE.md](./hardware/JY61P_CAPTURE.md) | JY61P 200 Hz on former ELRS USART1: startup configuration, rate checks, wiring and capture. |
 | [hardware/JY60_UART_DEMO.md](./hardware/JY60_UART_DEMO.md) | Sensor-only JY60 demo using the former ELRS USART1 connector, flash/RTT instructions and hardware verification. |
 | [hardware/HX8_JY60_CAPTURE.md](./hardware/HX8_JY60_CAPTURE.md) | Synchronized HX8 command and JY60 recording: VOFA 9090, capture 9091, MCU timestamps, automatic start/end. |
-| [hardware/HC13_HOST_PROTOCOL_V1.md](./hardware/HC13_HOST_PROTOCOL_V1.md) | Host interface contract: sensor telemetry, HX8 and gripper commands, modes, acknowledgments and completion. Specification only; firmware/GUI integration pending. |
+| [hardware/HC13_HOST_PROTOCOL_V2.md](./hardware/HC13_HOST_PROTOCOL_V2.md) | Current unified HC13 V2: preparation, one-shot linked pick, candidate/trigger semantics, telemetry and calibration guards. Compiled/software-tested; not flashed. |
+| [hardware/HC13_HOST_PROTOCOL_V1.md](./hardware/HC13_HOST_PROTOCOL_V1.md) | Historical V1 contract; incompatible with the current V2 host build. |
+| [hardware/HC13_HOST_BUILD.md](./hardware/HC13_HOST_BUILD.md) | Build and test the unified USART3 HC13 host firmware; configured poses, known limits and no-flash validation. |
 | [hardware/vl53l1x_grasp_gate.md](./hardware/vl53l1x_grasp_gate.md) | VL53L1X wiring and gripper gate notes for the active I2C distance-sensor path. |
 | [hardware/vl53l0x_tof.md](./hardware/vl53l0x_tof.md) | Superseded GY-VL53L0X bring-up notes retained for rollback. |
 | [demo/final-demo.md](./demo/final-demo.md) | Final `demo_v6` demo/testbench scope and media entry points. |
