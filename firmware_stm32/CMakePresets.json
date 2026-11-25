@@ -1,0 +1,29 @@
+{
+  "version": 6,
+  "configurePresets": [
+    {
+      "name": "hc13-debug",
+      "displayName": "HC13 V2 Debug (SWD probe independent)",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/cmake-build-hc13-debug",
+      "environment": {
+        "PATH": "E:/software/xpack-arm-none-eabi-gcc-15.2.1-1.1/bin;$penv{PATH}"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CMAKE_MAKE_PROGRAM": "E:/software/CLion 2025.3/bin/ninja/win/x64/ninja.exe",
+        "HX8_JY60_CAPTURE": "ON",
+        "JY61P_CAPTURE": "ON",
+        "JY61P_DIAGNOSTIC": "OFF",
+        "HC13_HOST_LINK": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "hc13-debug",
+      "configurePreset": "hc13-debug",
+      "targets": ["FOC_DEMO2.elf"]
+    }
+  ]
+}

@@ -48,7 +48,12 @@ typedef enum {
  * The HX8 protocol itself supports a wider range; this narrower envelope
  * protects the actual AerialRoboArm mechanism. */
 #define ARA_MAIN_ARM_ANGLE_MIN_DEG   (-90)
+/* HC13 experiments use the HX8 protocol ceiling; retain the formal RC limit. */
+#if defined(HC13_HOST_LINK)
+#define ARA_MAIN_ARM_ANGLE_MAX_DEG   (180)
+#else
 #define ARA_MAIN_ARM_ANGLE_MAX_DEG   (85)
+#endif
 #define ARA_MAIN_ARM_DEFAULT_ANGLE_DEG (0)
 
 /* --- 4. Common Callback Type --- */

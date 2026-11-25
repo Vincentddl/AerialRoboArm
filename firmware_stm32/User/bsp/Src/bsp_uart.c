@@ -85,6 +85,10 @@ static uint32_t s_fsus_last_tx_start_ms = 0U;
 static volatile uint32_t s_elrs_rx_bytes = 0U;
 static volatile uint32_t s_hc13_rx_bytes = 0U;
 static volatile uint32_t s_uart_rx_dma_recoveries = 0U;
+#if defined(JY61P_CAPTURE)
+static volatile uint32_t s_imu_rx_errors;
+static volatile uint32_t s_imu_rearm_failures;
+#endif
 
 /* =============================================================================
  * Half-Duplex transaction state (legacy ST3215 / USART2)
@@ -130,21 +134,22 @@ static uint16_t GetDmaHead(BspUart_Dev_t dev) {
     return head;
 }
 
-static void RestartCircularDmaRx(BspUart_Dev_t dev)
+static AraStatus_t RestartCircularDmaRx(BspUart_Dev_t dev)
 {
-    if (dev >= BSP_UART_NUM) return;
+    if (dev >= BSP_UART_NUM) return ARA_ERR_IO;
 
     UartContext_t *ctx = &uart_ctx[dev];
-    if (ctx->huart == NULL || ctx->rx_buffer == NULL ||
+    if (ctx->huart == NULL || ctx->huart->hdmarx == NULL || ctx->rx_buffer == NULL ||
         ctx->rx_buffer_size == 0U) {
-        return;
+        return ARA_ERR_IO;
     }
 
     ctx->rx_tail_pos = 0U;
-    (void)HAL_UART_Receive_DMA(ctx->huart,
-                               ctx->rx_buffer,
-                               ctx->rx_buffer_size);
     s_uart_rx_dma_recoveries++;
+    if (HAL_UART_Receive_DMA(ctx->huart,ctx->rx_buffer,ctx->rx_buffer_size)!=HAL_OK ||
+        !(ctx->huart->hdmarx->Instance->CCR & DMA_CCR_EN) ||
+        !(ctx->huart->Instance->CR3 & USART_CR3_DMAR)) return ARA_ERR_IO;
+    return ARA_OK;
 }
 
 /* Low-latency bring-up echo for HC13.
@@ -310,6 +315,25 @@ AraStatus_t BSP_UART_ImuWrite(const uint8_t *data,uint16_t len)
 {
     return HAL_UART_Transmit(uart_ctx[BSP_UART_ELRS].huart,(uint8_t *)data,len,50)==HAL_OK ? ARA_OK : ARA_ERR_IO;
 }
+
+AraStatus_t BSP_UART_ImuRestartRx(void)
+{
+    /* STM32F1's synchronous DMA abort disables the channel without waiting on ticks. */
+    uint32_t irq_mask=__get_PRIMASK();
+    __disable_irq();
+    AraStatus_t result=ARA_ERR_IO;
+    if (huart1.hdmarx!=NULL && HAL_UART_AbortReceive(&huart1)==HAL_OK) {
+        /* The UART abort handles DMA only while DMAR is set. */
+        if (HAL_DMA_GetState(huart1.hdmarx)!=HAL_DMA_STATE_BUSY || HAL_DMA_Abort(huart1.hdmarx)==HAL_OK)
+            result=RestartCircularDmaRx(BSP_UART_ELRS);
+    }
+    if (result!=ARA_OK) s_imu_rearm_failures++;
+    if (!irq_mask) __enable_irq();
+    return result;
+}
+
+uint32_t BSP_UART_ImuGetRxErrors(void) { return s_imu_rx_errors; }
+uint32_t BSP_UART_ImuGetRearmFailures(void) { return s_imu_rearm_failures; }
 #endif
 
 uint16_t BSP_UART_Read(BspUart_Dev_t dev, uint8_t *p_data, uint16_t len)
@@ -592,7 +616,12 @@ void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
      * blocking and aborts the RX DMA before calling this callback. Re-arm
      * circular RX here so a transient FE/NE/ORE cannot permanently stall RC. */
     if (huart == uart_ctx[BSP_UART_ELRS].huart) {
-        RestartCircularDmaRx(BSP_UART_ELRS);
+#if defined(JY61P_CAPTURE)
+        s_imu_rx_errors++;
+        if (RestartCircularDmaRx(BSP_UART_ELRS)!=ARA_OK) s_imu_rearm_failures++;
+#else
+        (void)RestartCircularDmaRx(BSP_UART_ELRS);
+#endif
         return;
     }
 }

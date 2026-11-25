@@ -22,6 +22,77 @@ static bool host_target_valid,host_pwm_started;
 static uint16_t host_acc_hz;
 static uint32_t host_rx_overflows;
 static uint32_t host_settled_since_ms;
+static uint32_t host_follow_tx_ms;
+static bool host_follow_tx_ever;
+static bool host_following_grace(uint32_t now)
+{ return host.following || (host_follow_tx_ever && now-host_follow_tx_ms<500U); }
+enum { CAPTURE_PRE_MS=250, CAPTURE_MOTION_MS=1750, CAPTURE_PRE_ROWS=52 };
+enum { CAPTURE_LIMIT=1, CAPTURE_IMU_IO=2, CAPTURE_IMU_STALE=4 };
+static struct {
+    uint8_t accel[HOST_CAPTURE_ACC_LIMIT][HOST_CAPTURE_ACC_BYTES];
+    uint8_t angles[HOST_CAPTURE_HX_LIMIT][HOST_CAPTURE_HX_BYTES];
+    uint8_t pre[CAPTURE_PRE_ROWS][HOST_CAPTURE_ACC_BYTES];
+    uint32_t id, start, end, settle_check_ms;
+    uint16_t acc_count, hx_count;
+    uint8_t pre_next, pre_count, flags;
+    bool active, sealed;
+} wireless_capture;
+
+static void capture_word(uint8_t *bytes,uint32_t value,unsigned size)
+{
+    for (unsigned i=0;i<size;i++) bytes[i]=(uint8_t)(value>>(8U*i));
+}
+
+static void capture_acc(uint32_t at,const int32_t *axes,bool idle)
+{
+    uint8_t *row;
+    if (wireless_capture.active) {
+        if (at-wireless_capture.start>CAPTURE_MOTION_MS ||
+            wireless_capture.acc_count>=HOST_CAPTURE_ACC_LIMIT) {
+            wireless_capture.flags|=CAPTURE_LIMIT;
+            return;
+        }
+        row=wireless_capture.accel[wireless_capture.acc_count++];
+    } else {
+        if (!idle) { wireless_capture.pre_count=0;return; }
+        row=wireless_capture.pre[wireless_capture.pre_next];
+        wireless_capture.pre_next=(wireless_capture.pre_next+1U)%CAPTURE_PRE_ROWS;
+        if (wireless_capture.pre_count<CAPTURE_PRE_ROWS) wireless_capture.pre_count++;
+    }
+    capture_word(row,at,2U);
+    for (unsigned i=0;i<3U;i++) capture_word(row+2U+2U*i,(uint32_t)axes[i],2U);
+}
+
+static void capture_angle(uint32_t at,int32_t angle_mdeg)
+{
+    if (wireless_capture.hx_count>=HOST_CAPTURE_HX_LIMIT) {
+        wireless_capture.flags|=CAPTURE_LIMIT;
+        return;
+    }
+    uint8_t *row=wireless_capture.angles[wireless_capture.hx_count++];
+    capture_word(row,at,2U);
+    capture_word(row+2, (uint32_t)angle_mdeg,4U);
+}
+
+static bool capture_read(uint32_t id,uint16_t page,HostCapturePage_t *out)
+{
+    if (!wireless_capture.sealed || wireless_capture.id!=id) return false;
+    const uint32_t accel_bytes=wireless_capture.acc_count*HOST_CAPTURE_ACC_BYTES;
+    const uint32_t total=accel_bytes+wireless_capture.hx_count*HOST_CAPTURE_HX_BYTES;
+    const uint32_t offset=(uint32_t)page*HOST_CAPTURE_PAGE_BYTES;
+    if (page && offset>=total) return false;
+    out->start_ms=wireless_capture.start;
+    out->end_ms=wireless_capture.end;
+    out->acc_count=wireless_capture.acc_count;
+    out->hx_count=wireless_capture.hx_count;
+    out->flags=wireless_capture.flags;
+    out->length=0;
+    const uint8_t *accel=(const uint8_t *)&wireless_capture.accel;
+    const uint8_t *angles=(const uint8_t *)&wireless_capture.angles;
+    for (uint32_t i=offset;i<total && out->length<HOST_CAPTURE_PAGE_BYTES;i++)
+        out->data[out->length++]=i<accel_bytes?accel[i]:angles[i-accel_bytes];
+    return true;
+}
 #endif
 
 static Jy60Parser_t imu;
@@ -47,6 +118,14 @@ static char line[32];
 static uint8_t line_len;
 static bool line_overflow;
 #if defined(JY61P_CAPTURE)
+enum { IMU_STALE_MS=250, IMU_REARM_INTERVAL_MS=1000 };
+static bool imu_recovering;
+static uint32_t imu_last_rearm_ms,imu_rate_start_ms;
+static uint8_t imu_rearm_attempts,imu_scan_index;
+static uint32_t imu_recovery_step_ms;
+typedef enum { IMU_REC_IDLE, IMU_REC_SCAN, IMU_REC_BAUD_CONFIRM, IMU_REC_RATE_CONFIRM } ImuRecoveryStage_t;
+static ImuRecoveryStage_t imu_recovery_stage;
+static const uint32_t imu_bauds[]={115200,9600,230400,57600,38400,19200,4800};
 /* About 45 kB/s of text at 600 IMU packets/s: buffer short host stalls. */
 #if defined(HC13_HOST_LINK)
 static char trace_buffer[4096]; /* Leave RAM for the host response/cache queues. */
@@ -56,6 +135,16 @@ static char trace_buffer[8192];
 static bool imu_rate_ok;
 static uint32_t rate_acc,rate_gyro,rate_angle;
 static void emit(const char *fmt,...);
+
+static void imu_reset_parser(uint32_t now)
+{
+    DrvJy60_Init(&imu);
+    rate_acc=rate_gyro=rate_angle=0;
+    imu_rate_start_ms=now;
+#if defined(HC13_HOST_LINK)
+    host_acc_hz=0;
+#endif
+}
 
 static void imu_delay(uint32_t ms)
 {
@@ -85,17 +174,16 @@ static bool imu_probe(uint32_t duration,uint32_t min_frames)
  * link; measured rates in the main loop verify the requested output rate. */
 static bool imu_configure(void)
 {
-    static const uint32_t bauds[]={115200,9600,230400,57600,38400,19200,4800};
     imu_delay(1200); /* Manufacturer specifies 1000 ms sensor startup. */
-    for (unsigned b=0;b<sizeof(bauds)/sizeof(bauds[0]);b++) {
-        if (BSP_UART_ImuSetBaud(bauds[b])!=ARA_OK) continue;
+    for (unsigned b=0;b<sizeof(imu_bauds)/sizeof(imu_bauds[0]);b++) {
+        if (BSP_UART_ImuSetBaud(imu_bauds[b])!=ARA_OK) continue;
         if (!imu_probe(700,3)) continue;
-        emit("[CAP] IMU_LINK baud=%lu good=%lu\r\n",(unsigned long)bauds[b],(unsigned long)imu.good_frames);
+        emit("[CAP] IMU_LINK baud=%lu good=%lu\r\n",(unsigned long)imu_bauds[b],(unsigned long)imu.good_frames);
         if (!imu_write_register(0x69,0xB588) || !imu_write_register(0x04,0x0006)) return false;
         if (BSP_UART_ImuSetBaud(115200)!=ARA_OK) return false;
         if (!imu_probe(700,3)) {
-            emit("[CAP] IMU_CONFIG_FAILED reason=baud_not_confirmed fallback_baud=%lu check_MCU_TX_to_IMU_RX=1\r\n",(unsigned long)bauds[b]);
-            (void)BSP_UART_ImuSetBaud(bauds[b]);DrvJy60_Init(&imu);return false;
+            emit("[CAP] IMU_CONFIG_FAILED reason=baud_not_confirmed fallback_baud=%lu check_MCU_TX_to_IMU_RX=1\r\n",(unsigned long)imu_bauds[b]);
+            (void)BSP_UART_ImuSetBaud(imu_bauds[b]);DrvJy60_Init(&imu);return false;
         }
         if (!imu_write_register(0x69,0xB588) ||
             !imu_write_register(0x02,0x000E) || /* ACC + GYRO + ANGLE only */
@@ -129,18 +217,163 @@ static void emit(const char *fmt,...)
 static bool imu_live(uint32_t now)
 {
 #if defined(JY61P_CAPTURE)
-    return imu_rate_ok && imu.acceleration.count && imu.angle.count && imu.gyro.count &&
+    return !imu_recovering && imu_rate_ok && imu.acceleration.count && imu.angle.count && imu.gyro.count &&
         now-imu.acceleration.timestamp_ms<50U && now-imu.angle.timestamp_ms<50U && now-imu.gyro.timestamp_ms<50U;
 #else
     return imu.angle.count && imu.gyro.count && now-imu.angle.timestamp_ms<200U && now-imu.gyro.timestamp_ms<200U;
 #endif
 }
+#if defined(JY61P_CAPTURE)
+static bool imu_stream_stale(uint32_t now)
+{
+    return !imu.acceleration.count || now-imu.acceleration.timestamp_ms>=IMU_STALE_MS ||
+           !imu.gyro.count || now-imu.gyro.timestamp_ms>=IMU_STALE_MS ||
+           !imu.angle.count || now-imu.angle.timestamp_ms>=IMU_STALE_MS;
+}
+
+static void imu_poll_recovery(uint32_t now)
+{
+    if (imu_recovery_stage==IMU_REC_IDLE && !imu_stream_stale(now) &&
+        imu_rate_ok && !imu_recovering) {
+        imu_rearm_attempts=0;
+        return;
+    }
+#if defined(HC13_HOST_LINK)
+    /* Keep the indication compatible with hosts that only know CAPTURE_IMU_IO. */
+    if (wireless_capture.active) wireless_capture.flags|=CAPTURE_IMU_IO|CAPTURE_IMU_STALE;
+#endif
+    /* Never change USART1 settings during a movement or an active capture. */
+    if (phase
+#if defined(HC13_HOST_LINK)
+        || wireless_capture.active || host.active || host.following
+#endif
+       ) return;
+    if (imu_recovery_stage!=IMU_REC_IDLE) {
+        if (imu_recovery_stage==IMU_REC_SCAN) {
+            if (!imu_recovery_step_ms) {
+                if (imu_scan_index>=sizeof(imu_bauds)/sizeof(imu_bauds[0])) {
+                    emit("[CAP] IMU_SCAN_FAILED rx_bytes=%lu good=%lu checksum=%lu uart_errors=%lu\r\n",
+                         (unsigned long)BSP_UART_Elrs_GetRxBytes(),(unsigned long)imu.good_frames,
+                         (unsigned long)imu.checksum_errors,(unsigned long)BSP_UART_ImuGetRxErrors());
+                    imu_scan_index=0;
+                }
+                if (BSP_UART_ImuSetBaud(imu_bauds[imu_scan_index])!=ARA_OK) {
+                    imu_scan_index++;
+                    return;
+                }
+                imu_reset_parser(now);
+                imu_recovery_step_ms=now;
+                return;
+            }
+            if (now-imu_recovery_step_ms<700U) return;
+            if (imu.good_frames<3U) {
+                imu_scan_index++;
+                imu_recovery_step_ms=0;
+                return;
+            }
+            emit("[CAP] IMU_SCAN_LINK baud=%lu good=%lu\r\n",
+                 (unsigned long)imu_bauds[imu_scan_index],(unsigned long)imu.good_frames);
+            if (!imu_write_register(0x69,0xB588) || !imu_write_register(0x04,0x0006) ||
+                BSP_UART_ImuSetBaud(115200)!=ARA_OK) {
+                imu_scan_index++;
+                imu_recovery_step_ms=0;
+                return;
+            }
+            now=HAL_GetTick();
+            imu_reset_parser(now);
+            imu_recovery_step_ms=now;
+            imu_recovery_stage=IMU_REC_BAUD_CONFIRM;
+            return;
+        }
+        if (imu_recovery_stage==IMU_REC_BAUD_CONFIRM) {
+            if (now-imu_recovery_step_ms<700U) return;
+            if (imu.good_frames<3U ||
+                !imu_write_register(0x69,0xB588) ||
+                !imu_write_register(0x02,0x000E) ||
+                !imu_write_register(0x03,0x000B) ||
+                !imu_write_register(0x1F,0x0002) ||
+                BSP_UART_ImuSetBaud(115200)!=ARA_OK) {
+                imu_scan_index++;
+                imu_recovery_step_ms=0;
+                imu_recovery_stage=IMU_REC_SCAN;
+                return;
+            }
+            now=HAL_GetTick();
+            imu_reset_parser(now);
+            imu_recovery_step_ms=now;
+            imu_recovery_stage=IMU_REC_RATE_CONFIRM;
+            return;
+        }
+        if (now-imu_recovery_step_ms<1100U) return;
+        uint32_t elapsed=now-imu_recovery_step_ms;
+        uint32_t acc_hz=imu.acceleration.count*1000U/elapsed;
+        uint32_t gyro_hz=imu.gyro.count*1000U/elapsed;
+        uint32_t angle_hz=imu.angle.count*1000U/elapsed;
+        if (acc_hz>=180U && acc_hz<=220U && gyro_hz>=180U && gyro_hz<=220U &&
+            angle_hz>=180U && angle_hz<=220U &&
+            !imu_stream_stale(now)) {
+            imu_rate_ok=true;
+            imu_recovering=false;
+            imu_rearm_attempts=0;
+            imu_recovery_stage=IMU_REC_IDLE;
+#if defined(HC13_HOST_LINK)
+            host_acc_hz=(uint16_t)acc_hz;
+#endif
+            emit("[CAP] IMU_RECONFIGURED baud=115200 acc=%lu gyro=%lu angle=%lu\r\n",
+                 (unsigned long)imu.acceleration.count,(unsigned long)imu.gyro.count,
+                 (unsigned long)imu.angle.count);
+        } else {
+            emit("[CAP] IMU_RATE_RETRY acc=%lu gyro=%lu angle=%lu rx_bytes=%lu\r\n",
+                 (unsigned long)imu.acceleration.count,(unsigned long)imu.gyro.count,
+                 (unsigned long)imu.angle.count,(unsigned long)BSP_UART_Elrs_GetRxBytes());
+            imu_scan_index=0;
+            imu_recovery_step_ms=0;
+            imu_recovery_stage=IMU_REC_SCAN;
+        }
+        rate_acc=imu.acceleration.count;rate_gyro=imu.gyro.count;rate_angle=imu.angle.count;
+        imu_rate_start_ms=now;
+        return;
+    }
+    if (now-imu_last_rearm_ms<IMU_REARM_INTERVAL_MS) return;
+    imu_last_rearm_ms=now;
+    imu_recovering=true;
+    imu_rate_ok=false;
+    if (++imu_rearm_attempts>=3U) {
+        imu_recovery_stage=IMU_REC_SCAN;
+        imu_scan_index=0;
+        imu_recovery_step_ms=0;
+        emit("[CAP] IMU_SCAN_START rx_bytes=%lu checksum=%lu uart_errors=%lu\r\n",
+             (unsigned long)BSP_UART_Elrs_GetRxBytes(),(unsigned long)imu.checksum_errors,
+             (unsigned long)BSP_UART_ImuGetRxErrors());
+        return;
+    }
+    /* Discard only the partial frame. Preserve sequence and error counters. */
+    imu.used=0;
+    rate_acc=imu.acceleration.count;rate_gyro=imu.gyro.count;rate_angle=imu.angle.count;
+    imu_rate_start_ms=now;
+    AraStatus_t result=BSP_UART_ImuRestartRx();
+    emit("[CAP] IMU_REARM t_ms=%lu result=%s uart_errors=%lu rearm_failures=%lu checksum_err=%lu\r\n",
+         (unsigned long)now,result==ARA_OK?"armed":"failed",(unsigned long)BSP_UART_ImuGetRxErrors(),
+         (unsigned long)BSP_UART_ImuGetRearmFailures(),(unsigned long)imu.checksum_errors);
+}
+#endif
 static bool hx_feedback_healthy(uint32_t now)
 {
-    return have_fb && now-last_fb_ms<200U && isfinite(fb.angle_deg) &&
+    /* Fast HX8 motion may delay one monitor reply. Keep a bounded running
+     * grace; admission to a new move still requires a <200 ms sample. */
+    bool moving=phase!=0U
+#if defined(HC13_HOST_LINK)
+        || host_following_grace(now)
+#endif
+        ;
+    return have_fb && now-last_fb_ms<(moving ? 400U : 200U) && isfinite(fb.angle_deg) &&
         fb.angle_deg>=-180.0f && fb.angle_deg<=180.0f &&
         fb.voltage_mv>=9000 && fb.voltage_mv<=12600 && !(fb.status&0xFEU);
 }
+#if defined(HC13_HOST_LINK)
+_Static_assert(HOST_MAX_ANGLE_MDEG == ARA_MAIN_ARM_ANGLE_MAX_DEG * 1000L,
+               "HC13 and HX8 angle limits must agree");
+#endif
 static bool hx_healthy(uint32_t now)
 {
     return hx_feedback_healthy(now) && (recovery_active ?
@@ -172,6 +405,14 @@ static void finish(const char *reason,uint32_t now,bool stop)
             (unsigned long)(drops-drop_baseline),(unsigned long)(imu.checksum_errors-checksum_baseline),
             (unsigned long)imu_seq,(unsigned long)hx_seq,(unsigned long)(BSP_UART_RxDma_GetRecoveries()-uart_baseline));
 #if defined(HC13_HOST_LINK)
+    if (wireless_capture.active) {
+        wireless_capture.end=now;
+        if (now-wireless_capture.start>CAPTURE_MOTION_MS) wireless_capture.flags|=CAPTURE_LIMIT;
+        if (imu.checksum_errors!=checksum_baseline ||
+            BSP_UART_RxDma_GetRecoveries()!=uart_baseline) wireless_capture.flags|=CAPTURE_IMU_IO;
+        wireless_capture.active=false;
+        wireless_capture.sealed=true;
+    }
     HostError_t host_reason=!strcmp(reason,"complete")?HOST_OK:!strcmp(reason,"operator_stop")?HOST_STOPPED:
         !strcmp(reason,"motion_timeout")?HOST_MOTION_TIMEOUT:!strcmp(reason,"tx_failed")?HOST_TX_FAILED:HOST_FEEDBACK_STALE;
     ModHc13Host_MotionFinished(&host,host_reason,now,(int32_t)lroundf(fb.angle_deg*1000.0f));
@@ -186,6 +427,10 @@ static void finish(const char *reason,uint32_t now,bool stop)
 static void on_feedback(uint32_t now)
 {
     fb.timestamp_ms=now;last_fb_ms=now;have_fb=true;hx_seq++;
+#if defined(HC13_HOST_LINK)
+    if (wireless_capture.active && now-wireless_capture.start<=CAPTURE_MOTION_MS)
+        capture_angle(now,(int32_t)lroundf(fb.angle_deg*1000.0f));
+#endif
     emit("[HX8] seq=%lu t_ms=%lu angle_mdeg=%ld voltage=%d current=%d status=0x%02X\r\n",
         (unsigned long)hx_seq,(unsigned long)now,(long)(fb.angle_deg*1000),fb.voltage_mv,fb.current_ma,fb.status);
     if (!phase) {
@@ -195,9 +440,21 @@ static void on_feedback(uint32_t now)
     }
     if (!hx_healthy(now)) { finish("hx8_fault",now,true);return; }
     if (phase!=1) return;
+#if defined(HC13_HOST_LINK)
+    /* Faster observation must not shorten or relax the existing stop criteria. */
+    if (wireless_capture.active) {
+        if (now-wireless_capture.settle_check_ms<50U) return;
+        wireless_capture.settle_check_ms=now;
+    }
+#endif
     bool quiet=previous_angle_valid && fabsf(fb.angle_deg-previous_angle)<=0.3f;
     previous_angle=fb.angle_deg;previous_angle_valid=true;
-    if (fabsf(fb.angle_deg-target)<=(recovery_active ? 0.5f : 1.0f) && quiet) {
+    float settle_tolerance_deg=recovery_active ? 0.5f : 1.0f;
+#if defined(HC13_HOST_LINK)
+    if (host.flow==HOST_FLOW_PICK)
+        settle_tolerance_deg=(float)HOST_PICK_SETTLE_TOLERANCE_MDEG/1000.0f;
+#endif
+    if (fabsf(fb.angle_deg-target)<=settle_tolerance_deg && quiet) {
 #if defined(HC13_HOST_LINK)
         if (!settled) host_settled_since_ms=now;
 #endif
@@ -233,6 +490,8 @@ static void monitor(uint32_t now)
     uint32_t period=50U;
 #if defined(HC13_HOST_LINK)
     if (phase==1U) period=ModHc13Host_FeedbackPeriod(&host);
+    if (wireless_capture.active && now-wireless_capture.start<=CAPTURE_MOTION_MS) period=10U;
+    if (host_follow_tx_ever && now-host_follow_tx_ms<12U) return;
 #endif
     if (query_pending || now-poll_ms<period) return;
     uint8_t tx[FSUS_TX_BUF_SIZE];uint16_t n=DrvFsus_EncodeServoMonitor(tx,0);
@@ -350,13 +609,23 @@ static void command(uint32_t now)
 #if defined(HC13_HOST_LINK)
 static void host_snapshot(HostSnapshot_t *s,uint32_t now)
 {
-    s->hx_online=have_fb && now-last_fb_ms<200U && isfinite(fb.angle_deg);
+    s->hx_have_feedback=have_fb;
+    s->hx_feedback_age_ms=have_fb?now-last_fb_ms:UINT32_MAX;
+    s->hx_last_angle_valid=have_fb&&isfinite(fb.angle_deg);
+    s->hx_last_pos_mdeg=s->hx_last_angle_valid?(int32_t)lroundf(fb.angle_deg*1000.0f):0;
+    s->hx_last_voltage_mv=have_fb?(uint16_t)fb.voltage_mv:0;
+    s->hx_last_current_ma=have_fb?(int16_t)fb.current_ma:0;
+    s->hx_last_status=have_fb?fb.status:0;
+    s->hx_online=have_fb && now-last_fb_ms<((phase || host_following_grace(now)) ? 400U : 200U) && isfinite(fb.angle_deg);
     s->hx_healthy=hx_feedback_healthy(now);s->ready=ready;s->recovery_ready=recovery_ready;
     s->imu_online=imu.acceleration.count && now-imu.acceleration.timestamp_ms<250U;
     s->imu_ready=imu_live(now);s->record_on=!manual_mode;s->target_valid=host_target_valid;
     s->phase=phase;s->pos_mdeg=s->hx_online?(int32_t)lroundf(fb.angle_deg*1000.0f):0;
     s->target_mdeg=(int32_t)lroundf(target*1000.0f);s->voltage_mv=s->hx_online?(uint16_t)fb.voltage_mv:0;
-    s->imu_hz=host_acc_hz;s->acc_count=imu.acceleration.count;s->acc_ms=imu.acceleration.timestamp_ms;
+    s->imu_hz=imu_recovering?0U:host_acc_hz;s->acc_count=imu.acceleration.count;s->acc_ms=imu.acceleration.timestamp_ms;
+    s->imu_rx_bytes=BSP_UART_Elrs_GetRxBytes();s->imu_good_frames=imu.good_frames;
+    s->imu_checksum_errors=imu.checksum_errors;s->imu_uart_errors=BSP_UART_ImuGetRxErrors();
+    s->imu_rearm_failures=BSP_UART_ImuGetRearmFailures();s->imu_recovery_stage=(uint8_t)imu_recovery_stage;
     s->motion_start_ms=start_ms;
     s->feedback_seq=hx_seq;
     for (unsigned i=0;i<3U;i++) s->acc_mg[i]=imu.acceleration.milli[i];
@@ -394,18 +663,18 @@ static HostError_t host_record(bool enabled)
 }
 static bool host_send(const char *text,size_t length)
 { return BSP_UART_HC13_TrySend((const uint8_t *)text,(uint16_t)length)==ARA_OK; }
-static HostError_t host_move(int32_t mdeg,uint16_t velocity,HostVerb_t kind,uint32_t now)
+static HostError_t host_move_with_ramp(int32_t mdeg,uint16_t velocity,HostVerb_t kind,uint16_t requested_ramp,uint32_t now)
 {
     bool home=kind==HOST_HOME,pick=kind==HOST_PICK;
     if (kind!=HOST_MOVE && kind!=HOST_HOME && kind!=HOST_SHAPE && kind!=HOST_PICK) return HOST_UNSUPPORTED;
     if (phase) return HOST_BUSY;
     if (!hx_feedback_healthy(now)) return HOST_HX8_OFFLINE;
-    if (!home && (mdeg< -90000 || mdeg>85000)) return HOST_OUT_OF_RANGE;
+    if (!home && (mdeg< -90000 || mdeg>ARA_MAIN_ARM_ANGLE_MAX_DEG*1000L)) return HOST_OUT_OF_RANGE;
     if (!velocity || velocity>500U) return HOST_OUT_OF_RANGE;
     if (home ? !recovery_ready : (!pick && !ready)) return HOST_NOT_READY;
     if (!home && !hx_healthy(now)) return HOST_NOT_READY;
     if (!home && kind!=HOST_SHAPE && !manual_mode && !imu_live(now)) return HOST_IMU_RATE_LOW;
-    uint16_t motion_ramp=(home || kind==HOST_SHAPE)?500U:ramp;
+    uint16_t motion_ramp=(home || kind==HOST_SHAPE)?500U:requested_ramp;
     uint8_t tx[FSUS_TX_BUF_SIZE];
     uint16_t n=DrvFsus_EncodeSetAngleByVelocity(tx,0,(float)mdeg/1000.0f,(float)velocity,motion_ramp,motion_ramp,0);
     query_pending=false;BSP_UART_Fsus_Flush();
@@ -428,6 +697,52 @@ static HostError_t host_move(int32_t mdeg,uint16_t velocity,HostVerb_t kind,uint
     }
     return HOST_OK;
 }
+static HostError_t host_move(int32_t mdeg,uint16_t velocity,HostVerb_t kind,uint32_t now)
+{ return host_move_with_ramp(mdeg,velocity,kind,ramp,now); }
+static HostError_t host_follow_move(int32_t mdeg,uint16_t velocity,uint32_t now)
+{
+    if (phase) return HOST_BUSY;
+    if (!hx_feedback_healthy(now)) return HOST_HX8_OFFLINE;
+    if (mdeg< -90000 || mdeg>ARA_MAIN_ARM_ANGLE_MAX_DEG*1000L) return HOST_OUT_OF_RANGE;
+    if (!velocity || velocity>500U) return HOST_OUT_OF_RANGE;
+    if (!hx_healthy(now)) return HOST_NOT_READY;
+    uint8_t tx[FSUS_TX_BUF_SIZE];
+    uint16_t n=DrvFsus_EncodeSetAngleByVelocity(tx,0,(float)mdeg/1000.0f,(float)velocity,ramp,ramp,0);
+    query_pending=false;BSP_UART_Fsus_Flush();
+    if (!n || BSP_UART_Fsus_Send(tx,n)!=ARA_OK) return HOST_TX_FAILED;
+    host_follow_tx_ms=now;host_follow_tx_ever=true;
+    target=(float)mdeg/1000.0f;host_target_valid=true;
+    ready=false;ModStartupAngle_Reset(&gate);
+    return HOST_OK;
+}
+static HostError_t host_experiment_move(int32_t mdeg,uint16_t velocity,uint16_t ramp_ms,uint32_t now)
+{
+    if (ramp_ms<20U || ramp_ms>2000U) return HOST_OUT_OF_RANGE;
+    return host_move_with_ramp(mdeg,velocity,HOST_MOVE,ramp_ms,now);
+}
+static void capture_begin(uint32_t id)
+{
+    wireless_capture.id=id;
+    wireless_capture.start=start_ms;
+    wireless_capture.end=start_ms;
+    wireless_capture.flags=0;
+    wireless_capture.acc_count=0;
+    wireless_capture.hx_count=0;
+    wireless_capture.sealed=false;
+    wireless_capture.settle_check_ms=start_ms;
+    unsigned first=(wireless_capture.pre_next+CAPTURE_PRE_ROWS-wireless_capture.pre_count)%CAPTURE_PRE_ROWS;
+    for (unsigned i=0;i<wireless_capture.pre_count;i++) {
+        const uint8_t *row=wireless_capture.pre[(first+i)%CAPTURE_PRE_ROWS];
+        uint16_t at=(uint16_t)(row[0]|((unsigned)row[1]<<8));
+        uint16_t age=(uint16_t)((uint16_t)start_ms-at);
+        if (age>0U && age<=CAPTURE_PRE_MS)
+            memcpy(wireless_capture.accel[wireless_capture.acc_count++],row,HOST_CAPTURE_ACC_BYTES);
+    }
+    wireless_capture.pre_count=0;
+    if (have_fb && start_ms-last_fb_ms<=CAPTURE_PRE_MS)
+        capture_angle(last_fb_ms,(int32_t)lroundf(fb.angle_deg*1000.0f));
+    wireless_capture.active=true;
+}
 static uint32_t host_boot_id(void)
 {
     /* Backup counter survives MCU resets; cycle timing adds variation on cold
@@ -446,9 +761,11 @@ static void host_init(void)
         .open_wait_calibrated=HOST_OPEN_WAIT_MS>=0,.close_wait_calibrated=HOST_CLOSE_WAIT_MS>=0,
         .open_wait_ms=HOST_OPEN_WAIT_MS>=0?HOST_OPEN_WAIT_MS:0,.close_wait_ms=HOST_CLOSE_WAIT_MS>=0?HOST_CLOSE_WAIT_MS:0,
         .default_lead_mdeg=HOST_DEFAULT_LEAD_MDEG,
+        .pc_working_mdeg=HOST_PC_WORKING_MDEG,.pc_folded_mdeg=HOST_PC_FOLDED_MDEG,
         .extension_sign=HOST_EXTENSION_SIGN,.max_extension_mdeg=HOST_MAX_EXTENSION_MDEG,
         .max_speed=500,.ramp_ms=100,.post_ms=1000,.min_confidence=HOST_VISION_MIN_CONFIDENCE};
-    const HostHooks_t hooks={.snapshot=host_snapshot,.move=host_move,.stop=host_stop,.servo=host_servo,
+    const HostHooks_t hooks={.snapshot=host_snapshot,.move=host_move,.follow_move=host_follow_move,.experiment_move=host_experiment_move,
+        .capture_begin=capture_begin,.capture_read=capture_read,.stop=host_stop,.servo=host_servo,
         .record=host_record,.send=host_send};
     ModHc13Host_Init(&host,&cfg,&hooks,host_boot_id(),HAL_GetTick());
     /* Discard commands accumulated during sensor startup/configuration.
@@ -469,11 +786,12 @@ void App_Hx8Jy60Capture_Run(void)
     DrvJy60_Init(&imu);ModStartupAngle_Reset(&gate);BSP_UART_Init();
 #if defined(HC13_HOST_LINK)
     CoreDebug->DEMCR|=CoreDebug_DEMCR_TRCENA_Msk;DWT->CTRL|=DWT_CTRL_CYCCNTENA_Msk;
-    emit("[CAP] HOST build=HC13_V2 usart3=230400 pwm=DEFERRED rtt=READONLY\r\n");
+    emit("[CAP] HOST build=HC13_V2 usart3=115200 pwm=DEFERRED rtt=READONLY\r\n");
 #endif
 #if defined(JY61P_CAPTURE)
     emit("[CAP] BOOT firmware=HX8_JY61P_CAPTURE imu=JY61P baud=115200 requested_hz=200 record=0 pwm=OFF autohome=OFF\r\n");
     bool configured=imu_configure();
+    imu_recovering=!configured;
     emit("[CAP] IMU_CONFIG verified=%u requested_baud=115200 requested_hz=200\r\n",configured);
 #if defined(HC13_HOST_LINK)
     host_init();
@@ -482,6 +800,10 @@ void App_Hx8Jy60Capture_Run(void)
     emit("[CAP] BOOT firmware=HX8_JY60_CAPTURE jy60=USART1_9600 hx8=USART2_115200 record=0 pwm=OFF autohome=OFF\r\n");
 #endif
     uint32_t heartbeat=HAL_GetTick(),last_key_ms=0;
+#if defined(JY61P_CAPTURE)
+    imu_rate_start_ms=heartbeat;
+    imu_last_rearm_ms=heartbeat; /* Allow the first full rate window after startup configuration. */
+#endif
     for (;;) {
         (void)HAL_IWDG_Refresh(&hiwdg);
         uint32_t now=HAL_GetTick();uint8_t bytes[64];uint16_t count;
@@ -490,6 +812,9 @@ void App_Hx8Jy60Capture_Run(void)
                 if (!DrvJy60_Push(&imu,bytes[i],HAL_GetTick())) continue;
                 const Jy60Vector_t *v=imu.last_type==0x51 ? &imu.acceleration : imu.last_type==0x52 ? &imu.gyro : &imu.angle;
                 imu_seq++;
+#if defined(HC13_HOST_LINK)
+                if (imu.last_type==0x51) capture_acc(v->timestamp_ms,v->milli,phase==0 && !host.following);
+#endif
 #if defined(JY61P_CAPTURE)
                 /* Compact transport only: retain every value, type and timestamp. */
                 emit("[I] %lu,%lu,%u,%ld,%ld,%ld,%d\r\n",
@@ -500,6 +825,9 @@ void App_Hx8Jy60Capture_Run(void)
                     (long)v->milli[0],(long)v->milli[1],(long)v->milli[2],v->tail_raw);
             }
         }
+#if defined(JY61P_CAPTURE)
+        imu_poll_recovery(HAL_GetTick());
+#endif
 #if defined(HC13_HOST_LINK)
         (void)BSP_UART_HC13_EnsureRxArmed();
         uint32_t overflows=BSP_UART_HC13_GetRxOverflows();
@@ -540,21 +868,29 @@ void App_Hx8Jy60Capture_Run(void)
                  post_ms
 #endif
                  ) finish("complete",now,false);
-        if (now-heartbeat>=1000U) {
 #if defined(JY61P_CAPTURE)
-            uint32_t elapsed=now-heartbeat;
+        if (now-imu_rate_start_ms>=1000U) {
+            uint32_t elapsed=now-imu_rate_start_ms;
+            imu_rate_start_ms=now;
             uint32_t acc_hz=(imu.acceleration.count-rate_acc)*1000U/elapsed;
 #if defined(HC13_HOST_LINK)
             host_acc_hz=(uint16_t)acc_hz;
 #endif
             uint32_t gyro_hz=(imu.gyro.count-rate_gyro)*1000U/elapsed;
             uint32_t angle_hz=(imu.angle.count-rate_angle)*1000U/elapsed;
-            imu_rate_ok=acc_hz>=180U && acc_hz<=220U && gyro_hz>=180U && gyro_hz<=220U && angle_hz>=180U && angle_hz<=220U;
+            if (imu_recovery_stage==IMU_REC_IDLE)
+                imu_rate_ok=acc_hz>=180U && acc_hz<=220U && gyro_hz>=180U && gyro_hz<=220U && angle_hz>=180U && angle_hz<=220U;
             rate_acc=imu.acceleration.count;rate_gyro=imu.gyro.count;rate_angle=imu.angle.count;
+            if (imu_recovering && imu_rate_ok && !imu_stream_stale(now)) {
+                imu_recovering=false;
+                emit("[CAP] IMU_RESUMED t_ms=%lu acc_hz=%lu\r\n",(unsigned long)now,(unsigned long)acc_hz);
+            }
             emit("[CAP] IMU_RATE acc_hz=%lu gyro_hz=%lu angle_hz=%lu rate_ok=%u period_ms=%lu discarded=%lu\r\n",
                 (unsigned long)acc_hz,(unsigned long)gyro_hz,(unsigned long)angle_hz,imu_rate_ok,
                 (unsigned long)imu.angle_period_ms,(unsigned long)imu.discarded_bytes);
+        }
 #endif
+        if (now-heartbeat>=1000U) {
             heartbeat=now;
             emit("[CAP] READY t_ms=%lu mode=%s record=%u ready=%u recovery_ready=%u phase=%u hx8=%u imu=%u angle_mdeg=%ld voltage=%d hx_tx=%lu hx_rx=%lu checksum_err=%lu drops_total=%lu\r\n",
                 (unsigned long)now,manual_mode ? "MANUAL_HX8" : "CAPTURE",!manual_mode,

@@ -6,9 +6,9 @@
 
 | 图 | PNG | 可编辑矢量图 |
 | --- | --- | --- |
-| 五分区分层架构（保留原图布局） | [PNG](../../Figures/architecture/control_system_five_columns_20261114.png) | [SVG](../../Figures/architecture/control_system_five_columns_20261114.svg) |
-| 控制系统总体架构 | [PNG](../../Figures/architecture/control_system_current_20261114.png) | [SVG](../../Figures/architecture/control_system_current_20261114.svg) |
-| 软件分层架构 | [PNG](../../Figures/architecture/software_architecture_current_20261114.png) | [SVG](../../Figures/architecture/software_architecture_current_20261114.svg) |
+| 五分区分层架构（保留原图布局） | [PNG](../../../figures/architecture/control_system_five_columns_20261114.png) | [SVG](../../../figures/architecture/control_system_five_columns_20261114.svg) |
+| 控制系统总体架构 | [PNG](../../../figures/architecture/control_system_current_20261114.png) | [SVG](../../../figures/architecture/control_system_current_20261114.svg) |
+| 软件分层架构 | [PNG](../../../figures/architecture/software_architecture_current_20261114.png) | [SVG](../../../figures/architecture/software_architecture_current_20261114.svg) |
 
 总体图用于描述输入、通信、控制器、执行器与反馈关系；软件图用于描述程序分层。图中箭头表示主要信息流或调用依赖，不表示每个模块均具有独立线程。
 

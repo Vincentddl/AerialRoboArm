@@ -38,6 +38,8 @@ flowchart LR
 
 两者不能混用协议。V2上位机需搭配`HC13_HOST_LINK=ON`固件；JY61P与ELRS共用接口，不能同时接入。正式AUTO不等于V2的PREP/PICK/TRIGGER实验流程。
 
+当前HC13实验构建的软件角度范围为−90°～+180°（PC工作位暂调至+90°、折叠预设暂调至+160°，均需实物复测），正式控制构建仍为−90°～+85°。PC手动／视觉单次抓取现使用MCU的PICK，在HX8新鲜位置反馈跨过目标前4°时应用一次闭爪PWM；普通MOVE不闭爪。高速运动的短暂反馈缺帧宽限设为400 ms，持续异常仍中止。详见[HC13 V2协议](Doc/hardware/HC13_HOST_PROTOCOL_V2.md)。
+
 ## 构建
 
 安装 CMake 4+、Ninja、Arm GNU Toolchain，并将工具加入 PATH。使用新的构建目录，避免沿用其他模式的缓存。

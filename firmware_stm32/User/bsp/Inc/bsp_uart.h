@@ -33,6 +33,9 @@ void BSP_UART_Init(void);
 /* Standalone capture only; resets the USART1 DMA receive cursor. */
 AraStatus_t BSP_UART_ImuSetBaud(uint32_t baud);
 AraStatus_t BSP_UART_ImuWrite(const uint8_t *data, uint16_t len);
+AraStatus_t BSP_UART_ImuRestartRx(void);
+uint32_t BSP_UART_ImuGetRxErrors(void);
+uint32_t BSP_UART_ImuGetRearmFailures(void);
 #endif
 
 /* Debug / Logging */

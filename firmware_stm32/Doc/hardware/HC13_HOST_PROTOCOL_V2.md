@@ -1,6 +1,6 @@
 # HC13统一调试协议 V2
 
-适用：`HC13_HOST_LINK=ON`的HX8/JY61P实验构建。更新：2026-11-06。格式依据`mod_hc13_host.c`，不适用于正式控制固件的持续视觉跟随协议。
+适用：`HC13_HOST_LINK=ON`的HX8/JY61P实验构建。更新：2026-11-11。格式依据`mod_hc13_host.c`，不适用于正式控制固件的持续视觉跟随协议。
 
 V2共享一个USART3处理控制与遥测，保留JY61P内部采集、夹爪独立调试和记录开关。程序构建、软件测试、历史查询往返及真实机构动作分别验证，不能互相代替。
 
@@ -19,49 +19,60 @@ V2共享一个USART3处理控制与遥测，保留JY61P内部采集、夹爪独�
 | 项目 | 程序配置 |
 | --- | --- |
 | HOME、NORMAL、PREP竖直位 | 同一HOST_VERTICAL_MDEG，当前编码器0° |
-| 伸出方向和软件范围 | 负向，−90°～+85° |
+| 伸出方向和软件范围 | 负向；HC13实验构建−90°～+180°，正式RC构建仍为−90°～+85° |
 | 最大速度 | 500°/s软件上限，非实测带载安全保证 |
 | 普通MOVE/PICK加减速 | 各100 ms |
 | 准备/折叠移动 | 30°/s，加减速各500 ms |
-| SERVO1张开/闭合预设 | 135°/90°，只有PWM命令，没有实测夹持反馈 |
+| SERVO1张开/闭合预设 | 110°/90°，只有PWM命令，没有实测夹持反馈 |
 | 开爪、闭爪等待时间 | 用户确认没有实测值；配置−1，对外发布NA |
-| 后折位置 | 未标定，发布NA，不猜测30° |
+| 后折位置 | MCU原生SHAPE标定仍为NA；PC实验折叠预设暂为+160°，机械安全边界尚待实测 |
 | 提前闭爪角 | 默认4°，PICK允许3～5°、0.1°步进 |
 | 视觉候选置信阈值/期限 | 60%，500 ms |
 
-未标定的准备、联动和折叠动作返回NOT_CALIBRATED，不填猜测等待时间。软件测试使用明确的模拟时间参数覆盖完整状态机，测试值不写入正式配置。
+MCU原生HOME/PREP/SHAPE仍要求相应等待或折叠标定，缺失时返回NOT_CALIBRATED。PC实验暂调的+90°工作位、+160°折叠位使用普通MOVE与显式SERVO操作，不冒充MCU原生HOME/SHAPE标定；调整后的两个位置待实物复测。
 
 ## PC→MCU
 
 | 报文 | 作用 |
 | --- | --- |
 | `GET,id,INFO` / `GET,id,CAL` / `GET,id,STATE` | 只查询，不触发机构动作 |
+| `GET,id,EXPERIMENT` | 只查询实验命令能力；新版回复 `EXPERIMENT,id,1,20,2000`；旧固件返回 `ERR,id,BAD_FRAME`，上位机据此禁止实验动作 |
+| `GET,id,CAPTURE` | 查询板载高频采样能力；支持时返回 `CAPTURE,id,1` |
+| `GET,id,CAPTURE,move_id,page` | 从第 0 页起读取已结束动作的板载数据，读取可重试；期间不发运动指令 |
 | `PING,id` | 心跳，返回PONG |
 | `MODE,id,MANUAL` / `VISION_DEMO` / `VISION_PICK` | 只改变路由，取消旧准备/候选/待闭爪流程；不自动回零或开爪 |
 | `HOME,id` / `SHAPE,id,NORMAL` / `PREP,id` | 同一准备流程：低速到竖直位→实际反馈确认→开爪PWM→等待标定时间→READY→DONE |
 | `SHAPE,id,FOLDED` | 先闭爪PWM→等待标定时间→向已标定位置后折→反馈确认→DONE |
-| `PICK,id,target_mdeg,speed_dps,lead_mdeg` | READY后接受一次锁定参数的联动抓取 |
+| `PICK,id,target_mdeg,speed_dps,lead_mdeg` | MCU READY竖直位，或PC实验+90°工作位／+160°折叠位且已应用开爪PWM时，接受一次锁定参数的联动抓取 |
 | `V,target_mdeg,speed_dps,confidence` | VISION_PICK且READY时只更新最新候选，不驱动HX8 |
 | `TRIGGER,id` | 使用500 ms内的最新候选及默认提前量，触发一次PICK；消费候选 |
 | `MOVE,id,target_mdeg,speed_dps` | 普通位置调试，不需要准备，不自动闭爪；仅MANUAL |
+| `XMOVE,id,target_mdeg,speed_dps,ramp_ms` | 独立实验位置命令；加速、减速各用本次 `ramp_ms`，范围20～2000 ms；仅MANUAL且空闲、反馈健康时接受。不改变普通 MOVE/PICK 的默认100 ms，不操作夹爪 |
+| `XMOVE,id,target_mdeg,speed_dps,ramp_ms,1` | 协商到高频采样能力后，用尾部 `1` 同时触发板载记录。IMU 采样率未达到设备就绪条件时拒绝动作 |
 | `STOP,id` | 中止流程，取消所有待闭爪/候选/准备，尽可能保持HX8；已应用的夹爪PWM保持 |
 | `GRIP,id,OPEN` / `CLOSE` | 独立夹爪命令；不等于夹持成功，执行后取消READY |
 | `SERVO,id,1,angle_mdeg` | MANUAL下独立SERVO1角度调试，整度步进，执行后取消READY |
 | `RECORD,id,1` / `0` | 实验记录门控，动作中拒绝切换；启用需有效200 Hz数据 |
 
-MOVE/PICK角度范围−90000～85000，MOVE/PICK目标按100 mdeg步进，速度1～500。PICK的lead为3000～5000、按100 mdeg步进。SERVO角度0～180000，按1000 mdeg步进；仍受实际机构限制。
+HC13实验构建MOVE/PICK角度范围−90000～180000，MOVE/PICK目标按100 mdeg步进，速度1～500。PICK的lead为3000～5000、按100 mdeg步进。SERVO角度0～180000，按1000 mdeg步进；仍受实际机构限制。
+
+XMOVE沿用MOVE的目标、速度限制及请求序号去重。同一序号而斜坡参数不同会返回`REQUEST_CONFLICT`；成功时依次返回`ACK,id,XMOVE,ACCEPTED`、`MOTION`事件、`DONE,id,XMOVE,pos_mdeg`，拒绝或中止返回`ERR`。`EXPERIMENT`能力查询不增加运动命令序号，不驱动执行器。上位机以实际写出到MCU的`MOTION END/ABORT`接收为记录时间窗，ACC数据来自同一HC13链路，单位g且含重力；无有效样本时留空，不伪造数值。
 
 HOME/NORMAL仅MANUAL；PREP允许MANUAL和VISION_PICK；PICK允许MANUAL和VISION_PICK；TRIGGER仅VISION_PICK。VISION_DEMO不执行机构流程。独立GRIP仅在没有运行中的自动流程时执行。
+
+板载采样从触发前约 250 ms 记录至动作结束，发令后高频部分最多 1750 ms。每页最多 60 字节。回包为 `CAPDATA,id,move_id,page,acc_count,hx_count,start_ms,end_ms,flags,base64,crc32`。CRC-32 校验覆盖 CRC 前的整行（不含最后一个逗号）。拼接后先是三轴 ACC（小端 `uint16 时间低位 + int16×3 毫 g`），再是 HX8 角（小端 `uint16 时间低位 + int32 毫度`）。时间低位相对 `start_ms` 展开，起点可跨 16 位回卷。标志位 0 表示时窗或容量截止，位 1 表示 IMU 校验或 UART 恢复。读取过程不占用运动请求序号，设备忙时读请求可按页重试；最新一次高频出臂会替换板上前一次的缓存。
 
 ## MCU→PC
 
 ```text
 INFO,<id>,2,<boot_id>,<last_req_id>,230400,200,20,<max_speed>,<ramp_ms>,<post_ms>,<min_conf>,500
+EXPERIMENT,<id>,1,20,2000
 CAL,<id>,<vertical_mdeg>,<vertical_mdeg>,<extension_sign>,<max_extension_mdeg>,<folded_mdeg>,<open_mdeg>,<close_mdeg>,0,180000,<open_wait_ms>,<close_wait_ms>,<default_lead_mdeg>
 ACC,<seq>,<sample_ms>,<ax_mg>,<ay_mg>,<az_mg>
 STATE,<t_ms>,<mode>,<shape>,<motion>,<hx8_online>,<imu_online>,<pos_mdeg>,<target_mdeg>,<voltage_mv>,<imu_hz>,<record_on>,<acc_tx>,<grip_cmd_mdeg>,<grip_action>,<last_req_id>,<fault_code>,<reply_to>
 ACK,<id>,<verb>,<result>
 MOTION,<id>,<stage>,<t_ms>,<target_mdeg>,<pos_mdeg|NA>,<reason>
+HX8_DIAG,<t_ms>,<feedback_age_ms>,<last_pos_mdeg|NA>,<last_voltage_mv>,<last_current_ma>,<last_status>,<cause>
 DONE,<id>,<verb>,<actual_pos_mdeg>
 ERR,<id>,<code>
 PONG,<id>,<t_ms>
@@ -71,24 +82,32 @@ STATE字段沿用V1的18字段定义，但主要按GET STATE回复，不主动�
 
 MOTION阶段：PREPARING、OPEN_APPLIED、READY、START、CLOSE_APPLIED、ARRIVED、END、ABORT。OPEN/CLOSE_APPLIED仅说明PWM已应用。READY先于准备DONE；任何STOP、MODE变化、故障、失联会取消READY及候选，迟到事件不得重新使能动作。
 
+高速动作因 `FEEDBACK_STALE` 中止时，MCU 尝试发送一次 `HX8_DIAG`，供排查原始反馈原因；它不改变停机保护或动作结果。`feedback_age_ms` 是最后一次 HX8 反馈距诊断时的时间，尚无反馈时为 4294967295；电压、电流和状态位是最后一次反馈值，`last_status` 用十进制表示。`cause` 为 `NO_SAMPLE`、`AGE`、`ANGLE`、`VOLT_LOW`、`VOLT_HIGH`、`STATUS` 或 `HX8_OK_OR_OTHER`。最后一种表示 HX8 快照本身通过健康检查，还需排查主机接收溢出或其他联动条件。诊断帧可能因链路拥塞丢失，不能将缺席视为 HX8 正常。
+
 长动作ACK为ACCEPTED；独立PWM/STOP为APPLIED；MODE为实际模式名；RECORD为ON/OFF。只有DONE说明相应位置/准备流程完成，且仍不代表物体已被夹住。
 
 正式默认标定回复示例：
 
 ```text
-CAL,402,0,0,-1,90000,NA,135000,90000,0,180000,NA,NA,4000
+CAL,402,0,0,-1,90000,NA,110000,90000,0,180000,NA,NA,4000
 ```
 
 ## 单次联动判定
 
-1. 必须完成准备、当前位置仍接近竖直位，有新鲜健康HX8反馈；需要的夹爪配置和等待时间必须已标定。
-2. 目标必须在前伸软件范围内、沿配置方向前进；实际起点到目标行程必须大于提前量。
+1. MCU原生准备后的PICK要求READY且实际位置接近竖直位，并要求夹爪及开闭等待已标定。PC实验路径可从+90°或+160°起步，但必须已有显式110°开爪PWM命令、HX8稳定门控和健康新鲜反馈；夹爪实际位置无反馈，不能把PWM回执视为机械已张开。
+2. 目标必须在前伸软件范围内、沿配置方向前进；实际起点到目标行程必须大于提前量。MCU原生竖直位准备路径沿用相对0°的最大前伸限制；PC实验从+90°工作位或+160°折叠位起步时，目标在0°至+90°之间也属于允许的前伸区间。目标越过0°后仍沿用原有相对0°的最大前伸限制，不扩大负向角度边界。
 3. PICK/TRIGGER接受后锁定目标、速度和提前量，清除READY及候选；后续V不能改动本动作。
 4. 只用新的feedback_seq和有效实际角度判断进度。允许采样跨过阈值，不要求恰好采到目标前4°。缓存同一帧不能推进闭爪条件。
 5. 第一次跨过阈值后应用闭爪PWM并锁存，本动作最多一次。STOP/MODE/故障后的旧反馈不能迟到触发。
-6. 实际到位、实验续录窗口及已配置闭爪等待均结束后才DONE。位置失败、准备失败或反馈过期只能ABORT/ERR。
+6. PICK以新鲜HX8反馈确认实际位置在目标±2.5°内、连续至少5次安静且持续不少于200 ms后，才报告ARRIVED；还需闭爪命令已应用、实验续录窗口及已配置闭爪等待结束后才DONE。DONE携带实际位置，允许与目标有小幅偏差，不表示精确到目标角。其他运动仍使用原到位容差。PC实验路径的闭爪等待未标定，当前为0 ms，仅表示PWM已应用，不表示夹持完成。位置超出容差、准备失败或反馈过期只能ABORT/ERR。
 
-PICK运动阶段向HX8请求5 ms轮询间隔，实际频率受串口5 ms帧间隔、回复耗时和硬件刷新率限制，不能宣称已实测200 Hz。到位仍保留约200 ms安静确认，避免高频查询把稳定判断缩短为几十毫秒。其他动作保持原50 ms轮询。
+PICK运动阶段向HX8请求5 ms轮询间隔，实际频率受串口5 ms帧间隔、回复耗时和硬件刷新率限制，不能宣称已实测200 Hz。±2.5°判定范围集中配置在 `HOST_PICK_SETTLE_TOLERANCE_MDEG`，仅用于PICK；仍保留至少200 ms安静确认，避免高频查询把稳定判断缩短为几十毫秒。其他动作保持原50 ms轮询。
+
+## 当前PC实验动作序列
+
+上位机的正常／归零：MOVE到+90°，收到DONE后SERVO 110°开爪。折叠：先SERVO 110°开爪，再MOVE到暂定+160°。手动“按参数抓取”和视觉单次触发共用PICK，不由PC延时补发SERVO：MCU用新鲜HX8实际角度跨过目标前4°阈值时应用一次闭爪PWM 90°，HX8继续到目标。PC只在PICK DONE后取得新鲜无故障IDLE和闭爪命令状态时发送MOVE回到本次起点（+90°或+160°）。普通MOVE仍是位置调试，不联动夹爪。CLOSE_APPLIED只证明PWM命令已应用，无法证明抓住物体。
+
+HX8移动期间监测回复可有短暂延迟：MCU当前将反馈时间宽限设为400 ms，空闲和新动作准入仍要求200 ms内的反馈；状态位异常、电压越界或持续缺帧仍停止并锁定故障。此调整不保证任意速度可靠，需用实物及RTT的`[HX8]`记录复测。
 
 ## 记录、故障和事务
 
@@ -98,7 +117,7 @@ PICK运动阶段向HX8请求5 ms轮询间隔，实际频率受串口5 ms帧间�
 - 关键MOTION事件单独缓存；无线发送背压不推迟本地角度阈值判定。READY/事件按序发出后再发DONE。
 - 3秒没有有效PC消息会中止该无线会话的活动流程；只有查询的连接不会超时触发机构动作。
 - 接收损坏后丢弃残帧并取消准备/候选。FAULT、FEEDBACK_STALE、MOTION_TIMEOUT等错误保留；底层TX_FAILED映射为新版解析器认识的FAULT。
-- 折叠、开/闭爪等待仍未实测，默认NA是有意的阻止条件，不是通信失败。
+- MCU原生SHAPE折叠及准备等待仍未实测，默认NA会阻止这些原生命令；PC实验MOVE/SERVO/PICK路径单独运行，+90°工作位、+160°折叠位和高速动作仍需机构验证。
 
 ## 验证与构建
 

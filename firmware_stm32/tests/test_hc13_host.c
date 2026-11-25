@@ -5,7 +5,8 @@
 #include <string.h>
 
 static Hc13Host_t ctx;static HostSnapshot_t world;static uint32_t now;
-static unsigned moves,stops,servos,records;static int32_t last_servo;
+static unsigned moves,follow_moves,stops,servos,records;static int32_t last_servo,last_follow_target;
+static uint16_t last_follow_speed;
 static bool transport_ready,emit_stdout;static HostError_t move_error,stop_error,servo_error;
 static char output[64000];static size_t output_used;
 static void snapshot(HostSnapshot_t *s,uint32_t t) { (void)t;*s=world; }
@@ -14,6 +15,27 @@ static HostError_t move(int32_t target,uint16_t speed,HostVerb_t kind,uint32_t t
     assert(speed>=1 && speed<=500);assert(kind!=HOST_VISION);moves++;
     if (move_error) return move_error;
     world.target_valid=true;world.target_mdeg=target;world.motion_start_ms=t;world.phase=1;return HOST_OK;
+}
+static uint16_t last_ramp;
+static HostError_t follow_move(int32_t target,uint16_t speed,uint32_t t)
+{
+    (void)t;assert(speed>=1 && speed<=500);
+    if (move_error) return move_error;
+    follow_moves++;last_follow_target=target;last_follow_speed=speed;
+    world.target_valid=true;world.target_mdeg=target;return HOST_OK;
+}
+static HostError_t experiment_move(int32_t target,uint16_t speed,uint16_t ramp_ms,uint32_t t)
+{ last_ramp=ramp_ms;return move(target,speed,HOST_MOVE,t); }
+static uint32_t captured_id;
+static unsigned capture_starts, capture_reads;
+static void capture_begin(uint32_t id)
+{ captured_id=id;capture_starts++; }
+static bool capture_read(uint32_t id,uint16_t page,HostCapturePage_t *data)
+{
+    if (id!=captured_id || page) return false;
+    capture_reads++;
+    *data=(HostCapturePage_t){.start_ms=1000,.end_ms=1500,.acc_count=1,.length=8};
+    return true;
 }
 static HostError_t stop(uint32_t t)
 {
@@ -36,14 +58,16 @@ static void reset(bool calibrated)
     memset(&world,0,sizeof(world));world.hx_online=world.hx_healthy=world.ready=world.recovery_ready=true;
     world.imu_online=world.imu_ready=true;world.voltage_mv=11980;world.imu_hz=200;world.feedback_seq=1;
     world.acc_count=1;world.acc_ms=1000;world.acc_mg[0]=85;world.acc_mg[1]=-20;world.acc_mg[2]=998;
-    now=1000;moves=stops=servos=records=0;last_servo=-1;output_used=0;output[0]=0;
+    now=1000;moves=follow_moves=stops=servos=records=0;last_servo=-1;last_follow_target=0;last_follow_speed=0;output_used=0;output[0]=0;
     move_error=stop_error=servo_error=HOST_OK;transport_ready=true;
     HostConfig_t cfg={.vertical_mdeg=HOST_VERTICAL_MDEG,.grip_open_mdeg=HOST_GRIP_OPEN_MDEG,
         .grip_close_mdeg=HOST_GRIP_CLOSE_MDEG,.grip_calibrated=true,.extension_sign=-1,
+        .pc_working_mdeg=HOST_PC_WORKING_MDEG,.pc_folded_mdeg=HOST_PC_FOLDED_MDEG,
         .max_extension_mdeg=90000,.max_speed=500,.ramp_ms=100,.post_ms=1000,.min_confidence=60,
         .open_wait_calibrated=calibrated,.close_wait_calibrated=calibrated,
         .open_wait_ms=100,.close_wait_ms=150,.default_lead_mdeg=4000};
-    HostHooks_t hooks={snapshot,move,stop,servo,record,send};
+    HostHooks_t hooks={.snapshot=snapshot,.move=move,.follow_move=follow_move,.experiment_move=experiment_move,
+        .stop=stop,.servo=servo,.record=record,.send=send};
     ModHc13Host_Init(&ctx,&cfg,&hooks,12345,now);
 }
 static void drain(void) { for (unsigned i=0;i<24;i++) ModHc13Host_Poll(&ctx,now); }
@@ -67,29 +91,77 @@ static void prepare(unsigned id,const char *verb)
     else snprintf(text,sizeof(text),"%s,%u\n",verb,id);
     input(text);
     assert(!ctx.prepared);tick(300);arrive(0);done(0);tick(100);
-    assert(ctx.prepared && !ctx.active && last_servo==135000);
+    assert(ctx.prepared && !ctx.active && last_servo==HOST_GRIP_OPEN_MDEG);
 }
 static void parser_tests(void)
 {
     HostCommand_t c;
     const char *good[]={"MOVE,1,-30000,250","PICK,2,-30000,500,4000","PREP,3","TRIGGER,4",
-        "HOME,5","STOP,6","MODE,7,VISION_PICK","SHAPE,8,NORMAL","GRIP,9,OPEN","SERVO,10,1,120000",
-        "RECORD,11,1","GET,12,STATE","GET,13,INFO","GET,14,CAL","PING,15","V,-60000,500,95","MOVE,4294967295,85000,500"};
+        "HOME,5","STOP,6","MODE,7,VISION_PICK","MODE,19,VISION_FOLLOW","SHAPE,8,NORMAL","GRIP,9,OPEN","SERVO,10,1,120000",
+        "RECORD,11,1","GET,12,STATE","GET,13,INFO","GET,14,CAL","GET,16,EXPERIMENT","GET,18,IMU",
+        "PING,15","V,-60000,500,95","MOVE,4294967295,85000,500","XMOVE,17,20000,350,100"};
     for (unsigned i=0;i<sizeof(good)/sizeof(good[0]);i++) assert(ModHc13Host_Parse(good[i],strlen(good[i]),&c)==HOST_OK);
     const char *bad[]={"PICK,1,-30000,500,2999","PICK,1,-30000,500,5001","PICK,1,-30000,500,4050",
         "PICK,1,-30000,0,4000","MOVE,1,-30000","MOVE,1,-30000,250,EXTRA","MOVE,1,-90001,500",
         "MOVE,1,85001,500","MOVE,1,-30101,500","MOVE,4294967296,0,100","MOVE,0,0,100","MOVE,1,abc,100",
         "MODE,1,AUTO","GRIP,1,UNKNOWN","SERVO,1,2,90000","SERVO,1,1,90500","RECORD,1,2",
-        "V,-60000,500,101","V,-60000,0,90","V,-60000,500,95,3","MOVE,1,,100","MOVE,1,0, 100"};
+        "V,-60000,500,101","V,-60000,0,90","V,-60000,500,95,3","MOVE,1,,100","MOVE,1,0, 100",
+        "XMOVE,2,20000,350,19","XMOVE,2,20000,350,2001","XMOVE,2,20000,350,100,0"};
     for (unsigned i=0;i<sizeof(bad)/sizeof(bad[0]);i++) assert(ModHc13Host_Parse(bad[i],strlen(bad[i]),&c)!=HOST_OK);
     assert(ModHc13Host_Parse("MOVE,1,0\0,100",13,&c)!=HOST_OK);
+}
+static void experiment_move_tests(void)
+{
+    reset(true);
+    world.imu_rx_bytes=1234;world.imu_good_frames=600;
+    world.imu_checksum_errors=2;world.imu_uart_errors=1;
+    world.imu_rearm_failures=0;world.imu_recovery_stage=1;world.imu_hz=0;
+    input("GET,42,IMU\n");
+    assert(strstr(output,"IMU,42,1234,600,2,1,0,1,0\n") && moves==0);
+    input("GET,1,EXPERIMENT\n");
+    assert(strstr(output,"EXPERIMENT,1,1,20,2000\n") && moves==0);
+    input("XMOVE,2,20000,350,180\n");
+    assert(moves==1 && last_ramp==180 && strstr(output,"ACK,2,XMOVE,ACCEPTED\n"));
+    input("XMOVE,2,20000,350,200\n");
+    assert(moves==1 && strstr(output,"ERR,2,REQUEST_CONFLICT\n"));
+    arrive(20000);done(20000);
+    assert(strstr(output,"DONE,2,XMOVE,20000\n"));
+    input("MODE,3,VISION_DEMO\nXMOVE,4,20000,350,100\n");
+    assert(strstr(output,"ERR,4,MODE_DENIED\n"));
+}
+static void buffered_experiment_tests(void)
+{
+    reset(true);
+    ctx.hooks.capture_begin=capture_begin;
+    ctx.hooks.capture_read=capture_read;
+    captured_id=0;capture_starts=capture_reads=0;
+    input("GET,9,CAPTURE\n");
+    assert(strstr(output,"CAPTURE,9,1\n") && !moves);
+    world.imu_ready=false;
+    input("XMOVE,10,20000,350,100,1\n");
+    assert(strstr(output,"ERR,10,IMU_RATE_LOW\n") && !moves && !capture_starts);
+    world.imu_ready=true;
+    input("XMOVE,12,20000,350,100,1\nXMOVE,12,20000,350,100,1\n");
+    assert(moves==1 && capture_starts==1 && captured_id==12);
+    input("XMOVE,12,20000,350,100\n");
+    assert(strstr(output,"ERR,12,REQUEST_CONFLICT\n") && capture_starts==1);
+    input("GET,14,CAPTURE,12,0\n");
+    assert(!capture_reads && !strstr(output,"CAPDATA,14") && strstr(output,"ERR,14,BUSY\n"));
+    arrive(20000);done(20000);
+    input("GET,15,CAPTURE,12,0\n");
+    assert(capture_reads==1 && moves==1 && ctx.highest_id==12);
+    assert(strstr(output,"CAPDATA,15,12,0,1,0,1000,1500,0,AAAAAAAAAAA=,de7056ac\n"));
+    input("GET,16,CAPTURE,99,0\n");
+    assert(strstr(output,"ERR,16,NOT_READY\n"));
+    input("XMOVE,17,80000,350,100\n");
+    assert(moves==2 && capture_starts==1);
 }
 static void handshake_and_calibration(void)
 {
     reset(false);input("GET,1,INFO\nGET,2,CAL\nGET,3,STATE\nPING,4\n");
     assert(!moves && !stops && !servos && !records);
-    assert(strstr(output,"INFO,1,2,12345,0,230400,200,20,500,100,1000,60,500\n"));
-    assert(strstr(output,"CAL,2,0,0,-1,90000,NA,135000,90000,0,180000,NA,NA,4000\n"));
+    assert(strstr(output,"INFO,1,2,12345,0,115200,200,20,500,100,1000,60,500\n"));
+    assert(strstr(output,"CAL,2,0,0,-1,90000,NA,125000,90000,0,180000,NA,NA,4000\n"));
     input("HOME,10\nPREP,11\nSHAPE,12,NORMAL\nSHAPE,13,FOLDED\n");
     assert(!moves && !servos);assert(occurrences(output,"NOT_CALIBRATED")==4);
     input("MODE,14,VISION_PICK\n");assert(ctx.mode==HOST_VISION_PICK && !servos && !moves);
@@ -191,6 +263,120 @@ static void frame_recovery(void)
     drain();assert(strstr(output,"ACC,0,5,85,-20,998"));
 }
 static void complete_prepare(void) { tick(300);arrive(0);done(0);tick(100); }
+static void pc_preset_pick(void)
+{
+    /* No MCU PREP calibration is needed for the PC's explicitly opened
+     * working/fold presets. Closure still uses fresh encoder feedback. */
+    for (unsigned i=0;i<2;i++) {
+        reset(false);
+        world.pos_mdeg=i ? HOST_PC_FOLDED_MDEG : HOST_PC_WORKING_MDEG;
+        input("SERVO,1,1,125000\n");
+        input("PICK,2,-30000,500,4000\n");
+        assert(moves==1 && servos==1 && ctx.active);
+        feedback(-25000);assert(servos==1);
+        feedback(-28000);assert(servos==2 && last_servo==90000);
+        feedback(-29000);assert(servos==2);
+        arrive(-30000);done(-30000);tick(150);
+        assert(strstr(output,"DONE,2,PICK,-30000\n"));
+    }
+    /* An old open preset must not silently satisfy the new PICK gate. */
+    reset(false);world.pos_mdeg=HOST_PC_WORKING_MDEG;
+    input("SERVO,1,1,110000\nPICK,2,-30000,500,4000\n");
+    assert(!moves && strstr(output,"NOT_READY"));
+    reset(false);world.pos_mdeg=HOST_PC_WORKING_MDEG;
+    input("PICK,1,-30000,500,4000\n");
+    assert(!moves && strstr(output,"NOT_READY"));
+    reset(false);world.pos_mdeg=HOST_PC_FOLDED_MDEG;
+    input("SERVO,1,1,125000\nPICK,2,-30000,500,4000\nSTOP,3\n");
+    feedback(-29000);assert(servos==1 && !ctx.active);
+    HostCommand_t parsed;
+    assert(ModHc13Host_Parse("MOVE,4,160000,200",17,&parsed)==HOST_OK);
+    assert(ModHc13Host_Parse("MOVE,4,180000,200",17,&parsed)==HOST_OK);
+    assert(ModHc13Host_Parse("MOVE,4,180100,200",17,&parsed)==HOST_OUT_OF_RANGE);
+
+    /* A target between vertical 0 and the PC working position is still forward from
+     * either PC preset; it must not be rejected by the legacy 0-degree rule. */
+    for (unsigned i=0;i<2;i++) {
+        reset(false);world.pos_mdeg=i ? HOST_PC_FOLDED_MDEG : HOST_PC_WORKING_MDEG;
+        input("SERVO,1,1,125000\nPICK,2,5200,250,4000\n");
+        assert(moves==1 && ctx.active && strstr(output,"ACK,2,PICK,ACCEPTED\n"));
+        feedback(10000);assert(servos==1);
+        feedback(7000);assert(servos==2 && last_servo==HOST_GRIP_CLOSE_MDEG);
+        arrive(5200);done(5200);tick(150);
+        assert(strstr(output,"DONE,2,PICK,5200\n"));
+    }
+    reset(false);world.pos_mdeg=HOST_PC_WORKING_MDEG;
+    input("SERVO,1,1,125000\nPICK,2,91000,250,4000\n");
+    assert(!moves && strstr(output,"OUT_OF_RANGE"));
+}
+static void high_speed_feedback_abort_diagnostic(void)
+{
+    reset(false);world.pos_mdeg=HOST_PC_FOLDED_MDEG;
+    input("SERVO,1,1,125000\nPICK,2,-50000,425,4000\n");
+    assert(ctx.active && moves==1 && servos==1);
+    world.hx_healthy=false;world.hx_have_feedback=true;
+    world.hx_feedback_age_ms=20;world.hx_last_angle_valid=true;
+    world.hx_last_pos_mdeg=74200;world.hx_last_voltage_mv=8750;
+    world.hx_last_current_ma=1200;world.hx_last_status=0;
+    drain();
+    assert(!ctx.active && stops==1 && servos==1);
+    assert(occurrences(output,"HX8_DIAG,")==1);
+    assert(strstr(output,"HX8_DIAG,1000,20,74200,8750,1200,0,VOLT_LOW\n"));
+    assert(strstr(output,"ERR,2,FEEDBACK_STALE\n"));
+    feedback(-46000);assert(servos==1);
+}
+static void pick_near_target_completion(void)
+{
+    /* The motor may hold 1.5 deg short. A fresh, quiet arrival from the
+     * motion layer must let this PICK finish, so the PC can command return. */
+    reset(false);world.pos_mdeg=HOST_PC_FOLDED_MDEG;
+    input("SERVO,1,1,125000\nPICK,2,-2500,250,4000\n");
+    assert(ctx.active && moves==1);
+    feedback(-1000);assert(ctx.closed_once && last_servo==HOST_GRIP_CLOSE_MDEG);
+    arrive(-1000);done(-1000);tick(150);
+    assert(!ctx.active && strstr(output,"DONE,2,PICK,-1000\n"));
+
+    /* A 2.6 deg miss remains outside the bounded completion tolerance. */
+    reset(false);world.pos_mdeg=HOST_PC_FOLDED_MDEG;
+    input("SERVO,1,1,125000\nPICK,2,-2500,250,4000\n");
+    feedback(100);assert(ctx.closed_once);
+    arrive(100);done(100);tick(150);
+    assert(!ctx.active && strstr(output,"ERR,2,NOT_READY\n"));
+    assert(!strstr(output,"DONE,2,PICK"));
+}
+static void vision_follow_streaming_tests(void)
+{
+    reset(false);world.pos_mdeg=HOST_PC_WORKING_MDEG;
+    input("MODE,1,VISION_FOLLOW\n");
+    assert(ctx.mode==HOST_VISION_FOLLOW && servos==0 && moves==0 && follow_moves==0);
+    assert(strstr(output,"ACK,1,MODE,VISION_FOLLOW\n"));
+    /* Gripper and discrete pick commands are strictly forbidden in VISION_FOLLOW. */
+    input("GRIP,2,CLOSE\nSERVO,3,1,90000\nPICK,4,30000,300,4000\n");
+    assert(servos==0 && moves==0 && occurrences(output,"MODE_DENIED")==3);
+    /* First valid V frame dispatches immediately without waiting for discrete settle. */
+    input("V,62000,300,90\n");
+    assert(follow_moves==1 && last_follow_target==62000 && last_follow_speed==300 && ctx.following && servos==0);
+    input("GET,5,STATE\n");
+    assert(strstr(output,",VISION_FOLLOW,UNKNOWN,MOVING,1,1,90000,62000,"));
+    /* Updates arriving faster than 40 ms coalesce and flush on the 40 ms boundary. */
+    tick(20);input("V,55000,300,92\n");
+    assert(follow_moves==1 && ctx.follow_pending);
+    tick(10);input("V,48000,300,95\n");
+    assert(follow_moves==1 && ctx.follow_pending);
+    tick(10);
+    assert(follow_moves==2 && last_follow_target==48000 && !ctx.follow_pending && servos==0);
+    /* Sub-0.2 deg jitter (<200 mdeg) is filtered out. */
+    tick(50);input("V,48100,300,95\n");
+    assert(follow_moves==2 && !ctx.follow_pending);
+    /* Idle >600 ms returns motion state to IDLE without stopping/faulting. */
+    input("PING,6\n");tick(601);
+    assert(!ctx.following && stops==0);
+    /* Re-entering stream works immediately; link loss >3000 ms stops safely. */
+    input("V,40000,300,95\n");
+    assert(follow_moves==3 && ctx.following);
+    tick(3001);
+    assert(!ctx.following && stops==1 && ctx.fault==HOST_LINK_LOST && servos==0);
+}
 static void emit_fixture(void)
 {
     reset(true);emit_stdout=true;input("GET,1,INFO\nGET,2,CAL\nGET,3,STATE\nPING,4\n");
@@ -218,7 +404,17 @@ int main(int argc,char **argv)
     if (argc>1 && !strcmp(argv[1],"--emit-fixture")) { emit_fixture();return 0; }
     if (argc>1 && !strcmp(argv[1],"--peer")) { peer(true);return 0; }
     if (argc>1 && !strcmp(argv[1],"--peer-unconfigured")) { peer(false);return 0; }
-    parser_tests();handshake_and_calibration();prep_aliases_and_delays();pick_threshold_and_lock();
-    candidates_and_trigger();folding_stop_and_faults();ordinary_move_record_and_pressure();frame_recovery();
+    reset(false);
+    world.pos_mdeg=100000;
+    input("POSE,1,100000,181000\n");
+    assert(ctx.config.pc_working_mdeg==HOST_PC_WORKING_MDEG);
+    input("POSE,2,100000,170000\n");
+    assert(strstr(output,"ACK,2,POSE,APPLIED\n") && !moves && !servos && !ctx.owner);
+    assert(ctx.config.pc_working_mdeg==100000 && ctx.config.pc_folded_mdeg==170000);
+    input("SERVO,3,1,125000\nPICK,4,70000,200,4000\n");
+    assert(moves==1 && strstr(output,"ACK,4,PICK,ACCEPTED\n"));
+    parser_tests();experiment_move_tests();buffered_experiment_tests();handshake_and_calibration();prep_aliases_and_delays();pick_threshold_and_lock();
+    candidates_and_trigger();folding_stop_and_faults();ordinary_move_record_and_pressure();frame_recovery();pc_preset_pick();high_speed_feedback_abort_diagnostic();pick_near_target_completion();
+    vision_follow_streaming_tests();
     puts("HC13 V2 tests passed: preparation, linked pick, one-shot threshold, no late closure, candidates, cancellation, recording and framing.");return 0;
 }

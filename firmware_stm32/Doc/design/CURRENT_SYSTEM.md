@@ -89,9 +89,9 @@ IMU约200Hz目标采样，经RTT保存完整数据；无线ACC约20Hz。文件�
 
 ## 5. 当前架构图（2026-11-14）
 
-- [五分区分层架构 PNG（保留原图布局）](../../Figures/architecture/control_system_five_columns_20261114.png) / [可编辑 SVG](../../Figures/architecture/control_system_five_columns_20261114.svg)
-- [控制系统总体架构 PNG](../../Figures/architecture/control_system_current_20261114.png) / [可编辑 SVG](../../Figures/architecture/control_system_current_20261114.svg)
-- [软件分层架构 PNG](../../Figures/architecture/software_architecture_current_20261114.png) / [可编辑 SVG](../../Figures/architecture/software_architecture_current_20261114.svg)
+- [五分区分层架构 PNG（保留原图布局）](../../../figures/architecture/control_system_five_columns_20261114.png) / [可编辑 SVG](../../../figures/architecture/control_system_five_columns_20261114.svg)
+- [控制系统总体架构 PNG](../../../figures/architecture/control_system_current_20261114.png) / [可编辑 SVG](../../../figures/architecture/control_system_current_20261114.svg)
+- [软件分层架构 PNG](../../../figures/architecture/software_architecture_current_20261114.png) / [可编辑 SVG](../../../figures/architecture/software_architecture_current_20261114.svg)
 - [架构图依据与边界](architecture_figures_20261114.md)
 
 上述图对应默认正式控制构建；旧图仅保留为历史资料，不作为当前系统实现说明。

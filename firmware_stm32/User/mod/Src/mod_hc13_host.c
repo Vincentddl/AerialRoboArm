@@ -1,7 +1,9 @@
 #include "mod_hc13_host.h"
+#include "app_hc13_host_config.h"
 #include <stdarg.h>
 #include <stdio.h>
 #include <string.h>
+#include <inttypes.h>
 
 /* Pure C, V2 only. No transport or actuator is touched except via hooks. */
 static const char *const errors[]={"NONE","BAD_FRAME","BAD_NUMBER","OUT_OF_RANGE","NOT_READY",
@@ -11,13 +13,13 @@ static const char *const errors[]={"NONE","BAD_FRAME","BAD_NUMBER","OUT_OF_RANGE
 const char *ModHc13Host_ErrorName(HostError_t e)
 { return (unsigned)e<sizeof(errors)/sizeof(errors[0])?errors[e]:"FAULT"; }
 const char *ModHc13Host_ModeName(HostMode_t m)
-{ return m==HOST_MANUAL?"MANUAL":m==HOST_VISION_DEMO?"VISION_DEMO":"VISION_PICK"; }
+{ return m==HOST_MANUAL?"MANUAL":m==HOST_VISION_DEMO?"VISION_DEMO":m==HOST_VISION_PICK?"VISION_PICK":"VISION_FOLLOW"; }
 uint32_t ModHc13Host_FeedbackPeriod(const Hc13Host_t *c)
 { return c->active && c->flow==HOST_FLOW_PICK?5U:50U; }
 static const char *verb_name(HostVerb_t v)
 {
     static const char *const names[]={"MOVE","HOME","STOP","MODE","SHAPE","GRIP","SERVO","RECORD",
-        "GET","GET","GET","PING","V","PREP","PICK","TRIGGER"};
+        "GET","GET","GET","PING","V","PREP","PICK","TRIGGER","XMOVE","GET","POSE","GET","GET"};
     return (unsigned)v<sizeof(names)/sizeof(names[0])?names[v]:"UNKNOWN";
 }
 static bool number(const char *s,uint32_t *out)
@@ -59,23 +61,46 @@ HostError_t ModHc13Host_Parse(const char *line,size_t length,HostCommand_t *out)
         uint32_t speed,confidence;
         if (count!=4U) return HOST_BAD_FRAME;
         if (!signed_number(f[1],&out->value) || !number(f[2],&speed) || !number(f[3],&confidence)) return HOST_BAD_NUMBER;
-        if (out->value< -90000 || out->value>85000 || !speed || speed>500U || confidence>100U) return HOST_OUT_OF_RANGE;
+        if (out->value< -90000 || out->value>HOST_MAX_ANGLE_MDEG || !speed || speed>500U || confidence>100U) return HOST_OUT_OF_RANGE;
         out->verb=HOST_VISION;out->speed=(uint16_t)speed;out->confidence=(uint8_t)confidence;return HOST_OK;
     }
     if (count<2U || !number(f[1],&out->id)) return HOST_BAD_NUMBER;
     if (!out->id) return HOST_OUT_OF_RANGE;
-    if (!strcmp(f[0],"GET") && count==3U) {
+    if (!strcmp(f[0],"GET") && (count==3U || count==5U) && !strcmp(f[2],"CAPTURE")) {
+        out->verb=HOST_GET_CAPTURE;
+        if (count==5U) {
+            uint32_t page;
+            if (!number(f[3],&out->capture_id) || !number(f[4],&page)) return HOST_BAD_NUMBER;
+            if (!out->capture_id || page>UINT16_MAX) return HOST_OUT_OF_RANGE;
+            out->value=(int32_t)page;
+        }
+    } else if (!strcmp(f[0],"GET") && count==3U) {
         if (!strcmp(f[2],"INFO")) out->verb=HOST_GET_INFO;
         else if (!strcmp(f[2],"CAL")) out->verb=HOST_GET_CAL;
         else if (!strcmp(f[2],"STATE")) out->verb=HOST_GET_STATE;
+        else if (!strcmp(f[2],"EXPERIMENT")) out->verb=HOST_GET_EXPERIMENT;
+        else if (!strcmp(f[2],"IMU")) out->verb=HOST_GET_IMU;
         else return HOST_BAD_FRAME;
+    } else if (!strcmp(f[0],"POSE") && count==4U) {
+        if (!signed_number(f[2],&out->value) || !signed_number(f[3],&out->folded_mdeg)) return HOST_BAD_NUMBER;
+        if (out->value < -16000 || out->value > HOST_MAX_ANGLE_MDEG ||
+            out->folded_mdeg < out->value + 10000 || out->folded_mdeg > HOST_MAX_ANGLE_MDEG ||
+            out->value%100 || out->folded_mdeg%100) return HOST_OUT_OF_RANGE;
+        out->verb=HOST_POSE;
     } else if (!strcmp(f[0],"PING") && count==2U) out->verb=HOST_PING;
-    else if ((!strcmp(f[0],"MOVE") && count==4U) || (!strcmp(f[0],"PICK") && count==5U)) {
+    else if ((!strcmp(f[0],"MOVE") && count==4U) || (!strcmp(f[0],"PICK") && count==5U) ||
+             (!strcmp(f[0],"XMOVE") && (count==5U || count==6U))) {
         uint32_t speed,lead=0;
-        if (!signed_number(f[2],&out->value) || !number(f[3],&speed) || (count==5U && !number(f[4],&lead))) return HOST_BAD_NUMBER;
-        if (out->value< -90000 || out->value>85000 || out->value%100 || !speed || speed>500U) return HOST_OUT_OF_RANGE;
-        if (count==5U && (lead<3000U || lead>5000U || lead%100U)) return HOST_OUT_OF_RANGE;
-        out->verb=count==5U?HOST_PICK:HOST_MOVE;out->speed=(uint16_t)speed;out->lead_mdeg=(uint16_t)lead;
+        if (!signed_number(f[2],&out->value) || !number(f[3],&speed) || (count>=5U && !number(f[4],&lead))) return HOST_BAD_NUMBER;
+        if (count==6U && strcmp(f[5],"1")) return HOST_OUT_OF_RANGE;
+        out->capture=count==6U;
+        if (out->value< -90000 || out->value>HOST_MAX_ANGLE_MDEG || out->value%100 || !speed || speed>500U) return HOST_OUT_OF_RANGE;
+        if (!strcmp(f[0],"PICK") && (lead<3000U || lead>5000U || lead%100U)) return HOST_OUT_OF_RANGE;
+        if (!strcmp(f[0],"XMOVE") && (lead<20U || lead>2000U)) return HOST_OUT_OF_RANGE;
+        out->verb=!strcmp(f[0],"PICK")?HOST_PICK:!strcmp(f[0],"XMOVE")?HOST_XMOVE:HOST_MOVE;
+        out->speed=(uint16_t)speed;
+        if (out->verb==HOST_PICK) out->lead_mdeg=(uint16_t)lead;
+        if (out->verb==HOST_XMOVE) out->ramp_ms=(uint16_t)lead;
     } else if (!strcmp(f[0],"HOME") && count==2U) out->verb=HOST_HOME;
     else if (!strcmp(f[0],"PREP") && count==2U) out->verb=HOST_PREP;
     else if (!strcmp(f[0],"TRIGGER") && count==2U) out->verb=HOST_TRIGGER;
@@ -85,6 +110,7 @@ HostError_t ModHc13Host_Parse(const char *line,size_t length,HostCommand_t *out)
         if (!strcmp(f[2],"MANUAL")) out->value=HOST_MANUAL;
         else if (!strcmp(f[2],"VISION_DEMO")) out->value=HOST_VISION_DEMO;
         else if (!strcmp(f[2],"VISION_PICK")) out->value=HOST_VISION_PICK;
+        else if (!strcmp(f[2],"VISION_FOLLOW")) out->value=HOST_VISION_FOLLOW;
         else return HOST_BAD_FRAME;
     } else if (!strcmp(f[0],"SHAPE") && count==3U) {
         out->verb=HOST_SHAPE;
@@ -131,10 +157,12 @@ static bool state_frame(Hc13Host_t *c,uint32_t now,uint32_t reply)
 {
     HostSnapshot_t s;snapshot(c,&s,now);
     char pos[16],target[16],voltage[12],grip[12];
-    numeric(pos,sizeof(pos),s.hx_online,s.pos_mdeg);numeric(target,sizeof(target),s.target_valid,s.target_mdeg);
+    bool target_ok=c->following?c->follow_sent_valid:s.target_valid;
+    int32_t target_val=c->following?c->follow_sent_mdeg:s.target_mdeg;
+    numeric(pos,sizeof(pos),s.hx_online,s.pos_mdeg);numeric(target,sizeof(target),target_ok,target_val);
     numeric(voltage,sizeof(voltage),s.hx_online,s.voltage_mv);numeric(grip,sizeof(grip),c->pwm_valid,c->grip_mdeg);
-    const char *shape="UNKNOWN",*motion=s.phase==2?"SETTLING":s.phase?"MOVING":c->active?"SETTLING":"IDLE";
-    if (s.hx_healthy && !s.phase && !c->active && (s.ready || c->prepared)) {
+    const char *shape="UNKNOWN",*motion=s.phase==2?"SETTLING":(s.phase||c->following)?"MOVING":c->active?"SETTLING":"IDLE";
+    if (s.hx_healthy && !s.phase && !c->active && !c->following && (s.ready || c->prepared)) {
         if (near(s.pos_mdeg,c->config.vertical_mdeg,1000)) shape="NORMAL";
         if (c->config.fold_calibrated && near(s.pos_mdeg,c->config.folded_mdeg,1000)) shape="FOLDED";
     }
@@ -149,7 +177,7 @@ static bool state_frame(Hc13Host_t *c,uint32_t now,uint32_t reply)
         grip,grip_actions[c->grip_action],(unsigned long)c->highest_id,ModHc13Host_ErrorName(fault),(unsigned long)reply);
 }
 static bool same(const HostCommand_t *a,const HostCommand_t *b)
-{ return a->verb==b->verb && a->id==b->id && a->value==b->value && a->speed==b->speed && a->confidence==b->confidence && a->lead_mdeg==b->lead_mdeg; }
+{ return a->verb==b->verb && a->id==b->id && a->value==b->value && a->folded_mdeg==b->folded_mdeg && a->speed==b->speed && a->confidence==b->confidence && a->lead_mdeg==b->lead_mdeg && a->ramp_ms==b->ramp_ms && a->capture==b->capture; }
 static HostCacheEntry_t *cached(Hc13Host_t *c,uint32_t id)
 {
     for (unsigned i=0;i<HOST_CACHE_SLOTS;i++) if (c->cache[i].valid && c->cache[i].command.id==id) return &c->cache[i];
@@ -176,6 +204,34 @@ static HostError_t apply_servo(Hc13Host_t *c,int32_t angle,uint8_t action)
     return e;
 }
 static void invalidate_ready(Hc13Host_t *c) { c->prepared=false;c->candidate_valid=false; }
+static void clear_follow(Hc13Host_t *c)
+{ c->following=false;c->follow_pending=false;c->follow_sent_valid=false; }
+static void flush_follow(Hc13Host_t *c,const HostSnapshot_t *s,uint32_t now)
+{
+    if (!c->follow_pending || c->mode!=HOST_VISION_FOLLOW || !c->hooks.follow_move) return;
+    if (!s->hx_online || !s->hx_healthy || c->active || s->phase) {
+        bool was_following=c->following;
+        c->follow_pending=false;c->following=false;
+        if (was_following) (void)c->hooks.stop(now);
+        if (!s->hx_online) c->fault=HOST_HX8_OFFLINE;
+        else if (!s->hx_healthy) c->fault=HOST_FEEDBACK_STALE;
+        return;
+    }
+    if (c->follow_sent_valid && now-c->follow_tx_ms<40U) return;
+    int64_t diff=(int64_t)c->follow_target_mdeg-(int64_t)c->follow_sent_mdeg;
+    if (diff<0) diff=-diff;
+    if (c->follow_sent_valid && diff<200 && now-c->follow_tx_ms<1000U) {
+        c->follow_pending=false;return;
+    }
+    HostError_t e=c->hooks.follow_move(c->follow_target_mdeg,c->follow_speed,now);
+    c->follow_pending=false;
+    if (e==HOST_OK) {
+        c->following=true;c->follow_sent_valid=true;
+        c->follow_sent_mdeg=c->follow_target_mdeg;c->follow_tx_ms=now;
+    } else {
+        c->following=false;c->fault=e;
+    }
+}
 static void event(Hc13Host_t *c,HostEventKind_t kind,uint32_t now,int32_t pos,HostError_t reason)
 {
     if (c->event_count>=8U) { c->event_overflow=true;return; }
@@ -192,7 +248,21 @@ static void finish_pending(Hc13Host_t *c,HostError_t reason,uint32_t now,int32_t
 }
 static HostError_t abort_flow(Hc13Host_t *c,HostError_t reason,uint32_t now,bool hold)
 {
-    HostSnapshot_t s;snapshot(c,&s,now);invalidate_ready(c);
+    HostSnapshot_t s;snapshot(c,&s,now);invalidate_ready(c);clear_follow(c);
+    if (c->active && reason==HOST_FEEDBACK_STALE) {
+        const char *cause=!s.hx_have_feedback?"NO_SAMPLE":
+            s.hx_feedback_age_ms>=(s.phase?400U:200U)?"AGE":
+            !s.hx_last_angle_valid || s.hx_last_pos_mdeg < -180000L ||
+                s.hx_last_pos_mdeg > 180000L?"ANGLE":
+            s.hx_last_voltage_mv<9000U?"VOLT_LOW":
+            s.hx_last_voltage_mv>12600U?"VOLT_HIGH":
+            (s.hx_last_status&0xFEU)?"STATUS":"HX8_OK_OR_OTHER";
+        char pos[16];numeric(pos,sizeof(pos),s.hx_last_angle_valid,s.hx_last_pos_mdeg);
+        (void)queue_format(c,"HX8_DIAG,%lu,%lu,%s,%u,%d,%u,%s\n",
+            (unsigned long)now,(unsigned long)s.hx_feedback_age_ms,pos,
+            (unsigned)s.hx_last_voltage_mv,(int)s.hx_last_current_ma,
+            (unsigned)s.hx_last_status,cause);
+    }
     c->flow=HOST_FLOW_IDLE;c->arrived=false;c->closed_once=false;
     c->event_head=0;c->event_count=0;c->event_overflow=false;c->finish_event_queued=false;
     HostError_t e=hold?c->hooks.stop(now):HOST_OK;
@@ -210,15 +280,29 @@ static bool preparation_calibrated(const Hc13Host_t *c)
 { return c->config.grip_calibrated && c->config.open_wait_calibrated; }
 static HostError_t start_pick(Hc13Host_t *c,const HostCommand_t *cmd,const HostSnapshot_t *s,uint32_t now)
 {
-    if (c->mode==HOST_VISION_DEMO) return HOST_MODE_DENIED;
-    if (!c->prepared || !near(s->pos_mdeg,c->config.vertical_mdeg,1000)) return HOST_NOT_READY;
-    if (!c->config.grip_calibrated || !c->config.open_wait_calibrated || !c->config.close_wait_calibrated) return HOST_NOT_CALIBRATED;
+    if (c->mode==HOST_VISION_DEMO || c->mode==HOST_VISION_FOLLOW) return HOST_MODE_DENIED;
+    /* The PC's tested working/fold presets are distinct from the MCU's 0°
+     * vertical preparation. A manual PICK may start there only after an
+     * explicit open PWM command; no inferred gripper position is used. */
+    bool legacy_start=c->prepared && near(s->pos_mdeg,c->config.vertical_mdeg,1000);
+    bool pc_start=(near(s->pos_mdeg,c->config.pc_working_mdeg,5000) ||
+                   near(s->pos_mdeg,c->config.pc_folded_mdeg,5000)) &&
+                  c->pwm_valid && c->grip_mdeg==c->config.grip_open_mdeg && s->ready;
+    if (!legacy_start && !pc_start) return HOST_NOT_READY;
+    if (!c->config.grip_calibrated || (legacy_start &&
+        (!c->config.open_wait_calibrated || !c->config.close_wait_calibrated))) return HOST_NOT_CALIBRATED;
     if (!s->hx_online) return HOST_HX8_OFFLINE;
     if (!s->hx_healthy) return HOST_NOT_READY;
     if (s->record_on && !s->imu_ready) return HOST_IMU_RATE_LOW;
-    int64_t extent=(int64_t)c->config.extension_sign*(cmd->value-c->config.vertical_mdeg);
+    /* Preserve the existing extension limit past vertical. PC manual PICK
+     * also permits the forward interval between its PC working pose
+     * and vertical, which cannot be measured from the legacy 0-degree origin. */
+    int64_t from_vertical=(int64_t)c->config.extension_sign*(cmd->value-c->config.vertical_mdeg);
+    int32_t extension_origin=pc_start && from_vertical<=0 ?
+        c->config.pc_working_mdeg : c->config.vertical_mdeg;
+    int64_t extent=(int64_t)c->config.extension_sign*(cmd->value-extension_origin);
     int64_t travel=(int64_t)c->config.extension_sign*(cmd->value-s->pos_mdeg);
-    if (cmd->value< -90000 || cmd->value>85000 || extent<=0 || extent>c->config.max_extension_mdeg ||
+    if (cmd->value< -90000 || cmd->value>HOST_MAX_ANGLE_MDEG || extent<=0 || extent>c->config.max_extension_mdeg ||
         travel<=cmd->lead_mdeg || cmd->lead_mdeg<3000U || cmd->lead_mdeg>5000U ||
         !cmd->speed || cmd->speed>c->config.max_speed) return HOST_OUT_OF_RANGE;
     HostError_t e=c->hooks.move(cmd->value,cmd->speed,HOST_PICK,now);
@@ -235,17 +319,26 @@ static HostError_t apply(Hc13Host_t *c,const HostCommand_t *cmd,const HostSnapsh
         HostError_t e=abort_flow(c,HOST_STOPPED,now,true);c->owner=false;c->fault=e;return e;
     }
     if (cmd->verb==HOST_MODE) {
-        if (c->active || s->phase) {
+        if (c->active || s->phase || (c->following && (HostMode_t)cmd->value!=c->mode)) {
             HostError_t e=abort_flow(c,HOST_STOPPED,now,true);
             if (e!=HOST_OK) return e;
         }
+        if ((HostMode_t)cmd->value!=c->mode) clear_follow(c);
         invalidate_ready(c);c->fault=HOST_OK;c->mode=(HostMode_t)cmd->value;*result=ModHc13Host_ModeName(c->mode);return HOST_OK;
     }
     if (s->phase || c->active) return HOST_BUSY;
-    if ((cmd->verb==HOST_MOVE || cmd->verb==HOST_HOME || cmd->verb==HOST_SHAPE || cmd->verb==HOST_SERVO) && c->mode!=HOST_MANUAL)
+    if (cmd->verb==HOST_POSE) {
+        if (c->mode!=HOST_MANUAL) return HOST_MODE_DENIED;
+        if (!s->hx_online) return HOST_HX8_OFFLINE;
+        if (!s->hx_healthy || !s->ready) return HOST_NOT_READY;
+        c->config.pc_working_mdeg=cmd->value;
+        c->config.pc_folded_mdeg=cmd->folded_mdeg;
+        return HOST_OK;
+    }
+    if ((cmd->verb==HOST_MOVE || cmd->verb==HOST_XMOVE || cmd->verb==HOST_HOME || cmd->verb==HOST_SHAPE || cmd->verb==HOST_SERVO) && c->mode!=HOST_MANUAL)
         return HOST_MODE_DENIED;
-    if (cmd->verb==HOST_PREP && c->mode==HOST_VISION_DEMO) return HOST_MODE_DENIED;
-    if (cmd->verb==HOST_GRIP && c->mode==HOST_VISION_DEMO) return HOST_MODE_DENIED;
+    if (cmd->verb==HOST_PREP && (c->mode==HOST_VISION_DEMO || c->mode==HOST_VISION_FOLLOW)) return HOST_MODE_DENIED;
+    if (cmd->verb==HOST_GRIP && (c->mode==HOST_VISION_DEMO || c->mode==HOST_VISION_FOLLOW)) return HOST_MODE_DENIED;
     if (cmd->verb==HOST_SERVO || cmd->verb==HOST_GRIP) {
         if (cmd->verb==HOST_GRIP && !c->config.grip_calibrated) return HOST_NOT_CALIBRATED;
         HostError_t e=apply_servo(c,cmd->verb==HOST_SERVO?cmd->value:
@@ -273,20 +366,24 @@ static HostError_t apply(Hc13Host_t *c,const HostCommand_t *cmd,const HostSnapsh
     bool fold=cmd->verb==HOST_SHAPE && cmd->value;
     if (prep && !preparation_calibrated(c)) return HOST_NOT_CALIBRATED;
     if (fold && (!c->config.fold_calibrated || !c->config.grip_calibrated || !c->config.close_wait_calibrated)) return HOST_NOT_CALIBRATED;
-    if (cmd->verb==HOST_MOVE || prep || fold) {
+    if (cmd->verb==HOST_MOVE || cmd->verb==HOST_XMOVE || prep || fold) {
         if (!s->hx_online) return HOST_HX8_OFFLINE;
         if (!s->hx_healthy || (prep?!s->recovery_ready:!s->ready)) return HOST_NOT_READY;
         if (fold) {
-            if (c->config.folded_mdeg< -90000 || c->config.folded_mdeg>85000) return HOST_OUT_OF_RANGE;
+            if (c->config.folded_mdeg< -90000 || c->config.folded_mdeg>HOST_MAX_ANGLE_MDEG) return HOST_OUT_OF_RANGE;
             HostError_t e=apply_servo(c,c->config.grip_close_mdeg,2);
             if (e!=HOST_OK) return e;
             begin(c,cmd,HOST_FLOW_FOLD_CLOSE_WAIT,c->config.folded_mdeg,now);
             event(c,HOST_EVENT_CLOSE,now,s->pos_mdeg,HOST_OK);*result="ACCEPTED";return HOST_OK;
         }
-        if (!prep && s->record_on && !s->imu_ready) return HOST_IMU_RATE_LOW;
+        if (cmd->capture && (!c->hooks.capture_begin || !c->hooks.capture_read)) return HOST_UNSUPPORTED;
+        if (!prep && (s->record_on || cmd->capture) && !s->imu_ready) return HOST_IMU_RATE_LOW;
         int32_t target=prep?c->config.vertical_mdeg:cmd->value;
-        HostError_t e=c->hooks.move(target,prep?30U:cmd->speed,prep?HOST_HOME:HOST_MOVE,now);
+        HostError_t e=cmd->verb==HOST_XMOVE ?
+            (c->hooks.experiment_move ? c->hooks.experiment_move(target,cmd->speed,cmd->ramp_ms,now) : HOST_UNSUPPORTED) :
+            c->hooks.move(target,prep?30U:cmd->speed,prep?HOST_HOME:HOST_MOVE,now);
         if (e==HOST_OK) {
+            if (cmd->capture) c->hooks.capture_begin(cmd->id);
             begin(c,cmd,prep?HOST_FLOW_PREP_MOVE:HOST_FLOW_POSITION,target,now);
             event(c,prep?HOST_EVENT_PREPARING:HOST_EVENT_START,now,s->pos_mdeg,HOST_OK);*result="ACCEPTED";
         }
@@ -294,19 +391,88 @@ static HostError_t apply(Hc13Host_t *c,const HostCommand_t *cmd,const HostSnapsh
     }
     return HOST_UNSUPPORTED;
 }
+
+static uint32_t capture_crc(const char *data,size_t length)
+{
+    uint32_t crc=UINT32_MAX;
+    for (size_t i=0;i<length;i++) {
+        crc^=(uint8_t)data[i];
+        for (unsigned bit=0;bit<8U;bit++)
+            crc=(crc>>1)^((crc&1U)?0xEDB88320UL:0U);
+    }
+    return ~crc;
+}
+
+static void capture_reply(Hc13Host_t *c,const HostCommand_t *cmd,const HostSnapshot_t *s)
+{
+    if (!c->hooks.capture_begin || !c->hooks.capture_read) {
+        (void)queue_format(c,"ERR,%" PRIu32 ",UNSUPPORTED\n",cmd->id);
+        return;
+    }
+    if (!cmd->capture_id) {
+        (void)queue_format(c,"CAPTURE,%" PRIu32 ",1\n",cmd->id);
+        return;
+    }
+    /* Readback uses spare reply slots, behind motion, STOP and keepalive. */
+    if (c->active || s->phase || c->tx_count>1U) {
+        (void)queue_format(c,"ERR,%" PRIu32 ",BUSY\n",cmd->id);
+        return;
+    }
+    HostCapturePage_t page;
+    if (!c->hooks.capture_read(cmd->capture_id,(uint16_t)cmd->value,&page)) {
+        (void)queue_format(c,"ERR,%" PRIu32 ",NOT_READY\n",cmd->id);
+        return;
+    }
+    char line[HOST_LINE_MAX+2U];
+    int header=snprintf(line,sizeof(line),"CAPDATA,%" PRIu32 ",%" PRIu32 ",%ld,%u,%u,%" PRIu32 ",%" PRIu32 ",%u,",
+                        cmd->id,cmd->capture_id,(long)cmd->value,(unsigned)page.acc_count,
+                        (unsigned)page.hx_count,page.start_ms,page.end_ms,(unsigned)page.flags);
+    size_t encoded=page.length?4U*((page.length+2U)/3U):1U;
+    if (header<0 || page.length>HOST_CAPTURE_PAGE_BYTES ||
+        (size_t)header+encoded+11U>sizeof(line)) return;
+    static const char alphabet[]="ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    size_t used=(size_t)header;
+    for (unsigned i=0;i<page.length;i+=3U) {
+        unsigned remaining=page.length-i;
+        uint32_t word=(uint32_t)page.data[i]<<16;
+        if (remaining>1U) word|=(uint32_t)page.data[i+1U]<<8;
+        if (remaining>2U) word|=page.data[i+2U];
+        line[used++]=alphabet[(word>>18)&63U];
+        line[used++]=alphabet[(word>>12)&63U];
+        line[used++]=remaining>1U?alphabet[(word>>6)&63U]:'=';
+        line[used++]=remaining>2U?alphabet[word&63U]:'=';
+    }
+    if (!page.length) line[used++]='-';
+    uint32_t crc=capture_crc(line,used);
+    (void)snprintf(line+used,sizeof(line)-used,",%08" PRIx32 "\n",crc);
+    (void)queue_line(c,line);
+}
+
 static void handle(Hc13Host_t *c,const HostCommand_t *cmd,uint32_t now)
 {
     HostSnapshot_t s;snapshot(c,&s,now);
     if (cmd->verb==HOST_VISION) {
         if (c->mode==HOST_VISION_PICK && c->prepared && !c->active && s.hx_healthy && cmd->confidence>=c->config.min_confidence) {
             c->candidate=*cmd;c->candidate_valid=true;c->candidate_ms=now;c->last_valid_ms=now;
+        } else if (c->mode==HOST_VISION_FOLLOW && !c->active && !s.phase && c->hooks.follow_move &&
+                   cmd->confidence>=c->config.min_confidence && cmd->speed<=c->config.max_speed &&
+                   cmd->value>=-90000 && cmd->value<=c->config.pc_folded_mdeg) {
+            c->last_valid_ms=now;
+            if (!s.hx_online || !s.hx_healthy) {
+                if (c->following) { clear_follow(c);(void)c->hooks.stop(now); }
+                c->fault=!s.hx_online?HOST_HX8_OFFLINE:HOST_FEEDBACK_STALE;
+                return;
+            }
+            c->follow_target_mdeg=cmd->value;c->follow_speed=cmd->speed;
+            c->follow_rx_ms=now;c->follow_pending=true;c->owner=true;c->fault=HOST_OK;
+            flush_follow(c,&s,now);
         }
-        return; /* Candidate only; never a motor command. */
+        return;
     }
     c->last_valid_ms=now;
     if (cmd->verb==HOST_PING) { (void)queue_format(c,"PONG,%lu,%lu\n",(unsigned long)cmd->id,(unsigned long)now);return; }
     if (cmd->verb==HOST_GET_INFO) {
-        (void)queue_format(c,"INFO,%lu,2,%lu,%lu,230400,200,20,%u,%u,%u,%u,500\n",(unsigned long)cmd->id,
+        (void)queue_format(c,"INFO,%lu,2,%lu,%lu,115200,200,20,%u,%u,%u,%u,500\n",(unsigned long)cmd->id,
             (unsigned long)c->boot_id,(unsigned long)c->highest_id,c->config.max_speed,c->config.ramp_ms,c->config.post_ms,c->config.min_confidence);return;
     }
     if (cmd->verb==HOST_GET_CAL) {
@@ -321,6 +487,17 @@ static void handle(Hc13Host_t *c,const HostCommand_t *cmd,uint32_t now)
             (unsigned long)c->config.max_extension_mdeg,fold,open,close,ow,cw,c->config.default_lead_mdeg);return;
     }
     if (cmd->verb==HOST_GET_STATE) { (void)state_frame(c,now,cmd->id);return; }
+    if (cmd->verb==HOST_GET_IMU) {
+        (void)queue_format(c,"IMU,%lu,%lu,%lu,%lu,%lu,%lu,%u,%u\n",(unsigned long)cmd->id,
+            (unsigned long)s.imu_rx_bytes,(unsigned long)s.imu_good_frames,
+            (unsigned long)s.imu_checksum_errors,(unsigned long)s.imu_uart_errors,
+            (unsigned long)s.imu_rearm_failures,s.imu_recovery_stage,s.imu_hz);
+        return;
+    }
+    if (cmd->verb==HOST_GET_CAPTURE) { capture_reply(c,cmd,&s);return; }
+    if (cmd->verb==HOST_GET_EXPERIMENT) {
+        (void)queue_format(c,"EXPERIMENT,%lu,1,20,2000\n",(unsigned long)cmd->id);return;
+    }
     HostCacheEntry_t *entry=cached(c,cmd->id);
     if (entry) {
         if (same(&entry->command,cmd)) (void)queue_line(c,entry->reply);
@@ -332,7 +509,7 @@ static void handle(Hc13Host_t *c,const HostCommand_t *cmd,uint32_t now)
     if (!priority && c->tx_count>HOST_TX_SLOTS-3U) { (void)queue_format(c,"ERR,%lu,BUSY\n",(unsigned long)cmd->id);return; }
     if (priority) { c->tx_count=0;c->tx_head=0; }
     const char *result;HostError_t e=apply(c,cmd,&s,now,&result);answer(c,cmd,e,result);
-    if (e==HOST_OK && cmd->verb!=HOST_RECORD && cmd->verb!=HOST_STOP) c->owner=true;
+    if (e==HOST_OK && cmd->verb!=HOST_RECORD && cmd->verb!=HOST_STOP && cmd->verb!=HOST_POSE) c->owner=true;
 }
 
 static void advance(Hc13Host_t *c,HostSnapshot_t *s,uint32_t now)
@@ -379,7 +556,10 @@ static void advance(Hc13Host_t *c,HostSnapshot_t *s,uint32_t now)
     bool finished=c->engine_done && (c->flow==HOST_FLOW_POSITION || c->flow==HOST_FLOW_FOLD_MOVE ||
         (c->flow==HOST_FLOW_PICK && c->closed_once && now-c->close_ms>=c->config.close_wait_ms));
     if (finished) {
-        if (!near(s->pos_mdeg,c->active_command.value,1000)) { (void)abort_flow(c,HOST_NOT_READY,now,true);return; }
+        int32_t completion_tolerance=c->flow==HOST_FLOW_PICK ? HOST_PICK_SETTLE_TOLERANCE_MDEG : 1000;
+        if (!near(s->pos_mdeg,c->active_command.value,completion_tolerance)) {
+            (void)abort_flow(c,HOST_NOT_READY,now,true);return;
+        }
         finish_pending(c,HOST_OK,now,s->pos_mdeg);
     }
 }
@@ -420,7 +600,7 @@ void ModHc13Host_Receive(Hc13Host_t *c,const uint8_t *bytes,size_t length,uint32
 void ModHc13Host_InputLost(Hc13Host_t *c,uint32_t now)
 {
     c->input_used=0;c->discard_input=true;c->invalid_frames++;invalidate_ready(c);
-    if (c->active) (void)abort_flow(c,HOST_FEEDBACK_STALE,now,true);
+    if (c->active || c->following) (void)abort_flow(c,HOST_FEEDBACK_STALE,now,true);
 }
 void ModHc13Host_MotionArrived(Hc13Host_t *c,uint32_t now,int32_t pos)
 {
@@ -442,10 +622,17 @@ void ModHc13Host_Poll(Hc13Host_t *c,uint32_t now)
     }
     if (c->candidate_valid && now-c->candidate_ms>500U) c->candidate_valid=false;
     if (c->owner && now-c->last_valid_ms>3000U) {
-        if (c->active) (void)abort_flow(c,HOST_LINK_LOST,now,true);
-        else invalidate_ready(c);
+        if (c->active || c->following) (void)abort_flow(c,HOST_LINK_LOST,now,true);
+        else { invalidate_ready(c);clear_follow(c); }
         c->owner=false;c->fault=HOST_LINK_LOST;
     }
+    if (c->following && (!s.hx_online || !s.hx_healthy)) {
+        clear_follow(c);(void)c->hooks.stop(now);
+        c->fault=!s.hx_online?HOST_HX8_OFFLINE:HOST_FEEDBACK_STALE;
+    } else if (c->following && !c->follow_pending && now-c->follow_rx_ms>600U) {
+        c->following=false;
+    }
+    flush_follow(c,&s,now);
     if (c->event_overflow) (void)abort_flow(c,HOST_FAULT,now,true);
     advance(c,&s,now);
     if (c->event_overflow) (void)abort_flow(c,HOST_FAULT,now,true);
