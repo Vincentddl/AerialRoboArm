@@ -1,0 +1,902 @@
+/**
+ * @file app_control.c
+ * @brief L5 ControlTask implementation (demo_v7).
+ */
+
+#include "app_control.h"
+#include "datahub.h"
+#include "debug_request.h"
+
+#include "task_rc.h"
+#include "task_vision.h"
+#include "task_arbiter.h"
+#include "task_manipulator.h"
+#include "task_motion.h"
+#include "mod_startup_angle.h"
+#include "mod_vofa_manual.h"
+#include "mod_home_zero.h"
+
+#include "FreeRTOS.h"
+#include "task.h"
+#include "cmsis_os2.h"
+
+#include <string.h>
+#include <math.h>
+
+/* =============================================================================
+ * Internal state
+ * ============================================================================= */
+
+typedef enum {
+    CTRL_PHASE_BOOT = 0,
+    CTRL_PHASE_SERVO_PING,
+    CTRL_PHASE_SERVO_CONFIG,
+    CTRL_PHASE_SERVO_ENABLE,
+    CTRL_PHASE_RUNNING,
+    CTRL_PHASE_FAULT
+} ControlPhase_t;
+
+static osThreadId_t     s_control_handle    = NULL;
+static volatile uint32_t s_heartbeat_ms     = 0U;
+static ControlPhase_t    s_phase            = CTRL_PHASE_BOOT;
+static uint32_t          s_phase_enter_ms   = 0U;
+static uint32_t          s_ping_attempts    = 0U;
+static float             s_startup_hold_angle_deg = 0.0f;
+static StartupAngleGate_t s_startup_angle_gate;
+static StartupAngleGate_t s_recovery_angle_gate;
+static bool s_default_position_pending = true;
+static bool s_default_position_commanded = false;
+static HomeZero_t s_home_zero;
+static bool s_home_checked = false;
+
+/* Latest artefacts (kept file-static so we can publish partial snapshots
+ * during bring-up phases). */
+static RcControlData_t  s_rc;
+static VisionIntent_t   s_vis;
+static ArbiterOutput_t  s_arb;
+static MotionCmd_t      s_mcmd;
+static MotionState_t    s_mstate;
+
+/* Force-mode bring-up state. When s_force_active is true, step_running skips
+ * normal Arbiter/Manipulator target selection but still applies feedback-age
+ * and stall safety before driving TaskMotion_Update directly. */
+static bool    s_force_active     = false;
+static int16_t s_force_angle_deg  = 0;
+
+/* PTK end-effector force overrides. -1 = follow arbiter; 0..180 = lock to
+ * that angle. Independent from s_force_active so operator can fix the
+ * gripper while still flying the main arm via RC. */
+static int16_t s_ptk_gripper_force_deg = -1;
+static volatile bool s_servo1_debug_active = false;
+static volatile uint8_t s_debug_target = 0U;
+static bool s_vofa_stopped = false;
+static bool s_vofa_reset_pulse = false;
+static int16_t s_ptk_roll_force_deg    = -1;
+static AraSysMode_t s_last_rc_requested_mode = ARA_MODE_INIT;
+
+/* Two-step reset latch. ControlTask owns this so arbiter can stay a pure
+ * function. Set by SD, RC loss, or a fresh HX8 stall report; cleared only
+ * when arbiter signals fault_reset_consumed after the cause is gone. */
+static bool    s_fault_latched    = false;
+
+#define APP_CONTROL_SERVO_RETRY_MS  (500U)
+/* Monitor queries run every 100 ms, but a control frame intentionally defers
+ * a due query by one 20 ms tick. Allow that plus one scheduler tick before
+ * freezing motion on missing physical feedback. */
+#define APP_CONTROL_FEEDBACK_MAX_AGE_MS (TASK_MOTION_FEEDBACK_PERIOD_MS + (2U * ARA_PERIOD_CONTROL_MS))
+#define APP_CONTROL_FORCE_FEEDBACK_MAX_AGE_MS APP_CONTROL_FEEDBACK_MAX_AGE_MS
+#define APP_CONTROL_LINK_LOST_AGE_MS    (300U)
+#define APP_CONTROL_RECONNECT_CENTER_MS  (300U)
+
+/* A telemetry outage must not allow CH1 to accumulate an unseen target.
+ * When fresh HX8 feedback returns, manual control stays parked at the
+ * encoder position until CH1 has remained centered for a short interval. */
+static bool     s_servo_control_ready = false;
+static bool     s_servo_was_control_ready = false;
+static bool     s_reconnect_guard_active = true;
+static uint32_t s_reconnect_center_since_ms = 0U;
+static int16_t  s_reconnect_hold_angle_deg = 0;
+static int16_t  s_last_known_servo_angle_deg = 0;
+static bool     s_last_known_servo_angle_valid = false;
+
+/* =============================================================================
+ * Helpers
+ * ============================================================================= */
+
+static void enter_phase(ControlPhase_t p, uint32_t now_ms)
+{
+    s_phase          = p;
+    s_phase_enter_ms = now_ms;
+}
+
+static AraLedPattern_t led_for_phase(ControlPhase_t p, AraLedPattern_t arb_led)
+{
+    switch (p) {
+    case CTRL_PHASE_BOOT:
+    case CTRL_PHASE_SERVO_PING:
+    case CTRL_PHASE_SERVO_CONFIG:
+    case CTRL_PHASE_SERVO_ENABLE:
+        return LED_PATTERN_BOOT_FAST_BLINK;
+    case CTRL_PHASE_FAULT:
+        return LED_PATTERN_ERROR_SOS;
+    case CTRL_PHASE_RUNNING:
+    default:
+        return arb_led;
+    }
+}
+
+static int16_t clamp_round_servo_angle(float angle_deg)
+{
+    int32_t rounded = (angle_deg >= 0.0f)
+                          ? (int32_t)(angle_deg + 0.5f)
+                          : (int32_t)(angle_deg - 0.5f);
+    if (rounded < TASK_MOTION_ANGLE_MIN_DEG) rounded = TASK_MOTION_ANGLE_MIN_DEG;
+    if (rounded > TASK_MOTION_ANGLE_MAX_DEG) rounded = TASK_MOTION_ANGLE_MAX_DEG;
+    return (int16_t)rounded;
+}
+
+static void seed_arm_target_from_encoder(float angle_deg)
+{
+    /* A measurement is not a command: never turn an invalid encoder reading
+     * into a boundary target by clamping it. */
+    if (!isfinite(angle_deg) || angle_deg < TASK_MOTION_ANGLE_MIN_DEG ||
+        angle_deg > TASK_MOTION_ANGLE_MAX_DEG) return;
+    const int16_t safe_angle = clamp_round_servo_angle(angle_deg);
+    s_last_known_servo_angle_deg = safe_angle;
+    s_last_known_servo_angle_valid = true;
+    s_reconnect_hold_angle_deg = safe_angle;
+    TaskRc_ReseedIncremental(safe_angle);
+    s_rc.incremental_angle_deg = safe_angle;
+    TaskManipulator_SeedCurrentAngle((float)safe_angle);
+}
+
+static void apply_servo_link_safety(uint32_t now_ms)
+{
+    if (s_mstate.feedback_fresh && s_mstate.is_stalled) {
+        /* A real monitor frame reported HX8 BIT2. Keep all later commands
+         * invalid until feedback clears and the operator performs reset. */
+        s_fault_latched = true;
+        seed_arm_target_from_encoder(s_mstate.feedback.angle_deg);
+        s_reconnect_guard_active = true;
+        s_reconnect_center_since_ms = 0U;
+    }
+
+    const bool feedback_recent =
+        s_mstate.servo_online &&
+        s_mstate.feedback_valid &&
+        (s_mstate.feedback_age_ms < APP_CONTROL_LINK_LOST_AGE_MS);
+    if (!feedback_recent && s_servo_was_control_ready) {
+        s_default_position_pending = true;
+    }
+
+    const bool feedback_healthy = feedback_recent &&
+        isfinite(s_mstate.feedback.angle_deg) &&
+        s_mstate.feedback.angle_deg >= TASK_MOTION_ANGLE_MIN_DEG &&
+        s_mstate.feedback.angle_deg <= TASK_MOTION_ANGLE_MAX_DEG &&
+        s_mstate.feedback.voltage_mv >= 9000 && s_mstate.feedback.voltage_mv <= 12600 &&
+        !(s_mstate.feedback.status & 0xFEU) && !s_mstate.encoder_jump_suspected;
+    if (!feedback_healthy) {
+        s_servo_was_control_ready = false;
+        ModStartupAngle_Reset(&s_recovery_angle_gate);
+    }
+    bool recovery_confirmed = s_servo_was_control_ready;
+    if (feedback_healthy && !recovery_confirmed) {
+        recovery_confirmed = ModStartupAngle_Update(&s_recovery_angle_gate,
+            &s_mstate.feedback, true, s_mstate.feedback_fresh, now_ms);
+    }
+    s_servo_control_ready = feedback_healthy && recovery_confirmed &&
+        s_mstate.feedback_age_ms < APP_CONTROL_FEEDBACK_MAX_AGE_MS;
+
+    if (s_servo_control_ready && s_mstate.feedback_fresh) {
+        s_last_known_servo_angle_deg = clamp_round_servo_angle(s_mstate.feedback.angle_deg);
+        s_last_known_servo_angle_valid = true;
+    }
+
+    if (!feedback_healthy) {
+        /* Undo any CH1 integration performed by TaskRc_Update this tick. */
+        if (s_last_known_servo_angle_valid) {
+            TaskRc_ReseedIncremental(s_last_known_servo_angle_deg);
+            s_rc.incremental_angle_deg = s_last_known_servo_angle_deg;
+        }
+        s_reconnect_guard_active = true;
+        s_reconnect_center_since_ms = 0U;
+        s_servo_was_control_ready = false;
+    } else if (!s_servo_control_ready) {
+        /* A missed monitor frame freezes motion for this tick, but is not yet
+         * a hard disconnect. Preserve a completed reconnect guard. */
+        if (s_last_known_servo_angle_valid) {
+            TaskRc_ReseedIncremental(s_last_known_servo_angle_deg);
+            s_rc.incremental_angle_deg = s_last_known_servo_angle_deg;
+        }
+        int16_t abs_ch1 = (s_rc.ch1_percent >= 0)
+                             ? s_rc.ch1_percent
+                             : (int16_t)(-s_rc.ch1_percent);
+        if (abs_ch1 > MOD_RC_CH1_DEADBAND_PCT) {
+            s_reconnect_center_since_ms = 0U;
+        }
+    } else if (!s_servo_was_control_ready) {
+        /* First stable 300 ms window after startup/outage: hold the confirmed
+         * encoder position, never a stale command or a clamped first reading. */
+        seed_arm_target_from_encoder(s_mstate.feedback.angle_deg);
+        s_reconnect_guard_active = true;
+        s_reconnect_center_since_ms = 0U;
+    }
+
+    if (s_servo_control_ready) {
+        s_servo_was_control_ready = true;
+    }
+
+    if (s_servo_control_ready && s_default_position_pending) {
+        s_startup_angle_gate = s_recovery_angle_gate;
+        s_home_checked = false;
+        ModHomeZero_Reset(&s_home_zero);
+        enter_phase(CTRL_PHASE_SERVO_ENABLE, now_ms);
+        return;
+    }
+
+    if (s_reconnect_guard_active &&
+        s_servo_control_ready &&
+        (s_debug_target == 2U || s_rc.req_mode == ARA_MODE_MANUAL)) {
+        /* Keep overwriting the accumulator while the operator recenters CH1. */
+        TaskRc_ReseedIncremental(s_reconnect_hold_angle_deg);
+        s_rc.incremental_angle_deg = s_reconnect_hold_angle_deg;
+
+        int16_t abs_ch1 = (s_rc.ch1_percent >= 0)
+                             ? s_rc.ch1_percent
+                             : (int16_t)(-s_rc.ch1_percent);
+        if (abs_ch1 <= MOD_RC_CH1_DEADBAND_PCT) {
+            if (s_reconnect_center_since_ms == 0U) {
+                s_reconnect_center_since_ms = now_ms;
+            } else if ((uint32_t)(now_ms - s_reconnect_center_since_ms) >=
+                       APP_CONTROL_RECONNECT_CENTER_MS) {
+                /* Do not reseed a half-completed default move to its current
+                 * angle. Keep zero until that intentional move has arrived. */
+                if (!s_default_position_commanded ||
+                    fabsf(s_mstate.feedback.angle_deg - ARA_MAIN_ARM_DEFAULT_ANGLE_DEG) <= 0.5f) {
+                    s_reconnect_guard_active = false;
+                    seed_arm_target_from_encoder(s_mstate.feedback.angle_deg);
+                    s_default_position_commanded = false;
+                }
+            }
+        } else {
+            s_reconnect_center_since_ms = 0U;
+        }
+    }
+}
+
+static void publish_hub(uint32_t now_ms, uint32_t loop_count)
+{
+    DataHub_t snap;
+    memset(&snap, 0, sizeof(snap));
+
+    if (s_servo1_debug_active) {
+        snap.current_mode = ARA_MODE_MANUAL;
+        snap.arbiter_mode = ARA_MODE_MANUAL;
+        snap.arbiter_reason_code = ARB_REASON_SERVO1_DEBUG;
+    } else if (s_phase == CTRL_PHASE_RUNNING) {
+        snap.current_mode = s_arb.mode;
+        snap.arbiter_mode = s_arb.mode;
+        snap.arbiter_reason_code = (uint8_t)s_arb.reason_code;
+    } else if (s_phase == CTRL_PHASE_FAULT) {
+        snap.current_mode = ARA_MODE_ERROR;
+        snap.arbiter_mode = ARA_MODE_ERROR;
+        snap.arbiter_reason_code = (uint8_t)ARB_REASON_SERVO_OFFLINE;
+    } else {
+        snap.current_mode = ARA_MODE_INIT;
+        snap.arbiter_mode = ARA_MODE_INIT;
+        snap.arbiter_reason_code = (uint8_t)ARB_REASON_BOOT;
+    }
+    snap.estop_active             = s_arb.estop || (s_phase != CTRL_PHASE_RUNNING);
+    snap.led_pattern              = led_for_phase(s_phase, s_arb.led_pattern);
+
+    snap.servo_target_angle_deg   = (int16_t)(s_arb.target_angle_deg * 10);
+    snap.servo_target_speed       = s_arb.target_speed;
+    snap.servo_target_acc         = s_arb.target_acc;
+    snap.servo_torque_request     = s_arb.torque_request;
+    if (s_phase == CTRL_PHASE_SERVO_ENABLE) {
+        snap.servo_target_angle_deg = ARA_MAIN_ARM_DEFAULT_ANGLE_DEG * 10;
+        snap.servo_target_speed = 80U;
+        snap.servo_torque_request = s_mcmd.torque_on;
+    }
+    snap.end_roll_deg             = s_arb.roll_degree;
+    snap.end_gripper_deg          = s_arb.gripper_angle;
+    snap.auto_pick_stage          = TaskManipulator_GetAutoStage();
+    snap.auto_grip_stable_frames  = TaskManipulator_GetGripStableFrames();
+    snap.home_zero_stage = (uint8_t)s_home_zero.stage;
+
+    if (s_mstate.feedback_valid) {
+        snap.servo_position_angle_deg = (int16_t)(s_mstate.feedback.angle_deg * 10.0f);
+        snap.servo_load               = s_mstate.feedback.current_ma;
+        snap.servo_voltage_dv         = (uint8_t)(s_mstate.feedback.voltage_mv / 100U);
+        snap.servo_voltage_mv         = s_mstate.feedback.voltage_mv;
+        snap.servo_power_mw           = s_mstate.feedback.power_mw;
+        snap.servo_temp_raw           = s_mstate.feedback.temp_raw;
+        snap.servo_hw_status          = s_mstate.feedback.status;
+        snap.servo_moving             = s_mstate.is_moving;
+    }
+    snap.servo_status = s_servo_control_ready ? ARA_OK : ARA_ERR_DISCONNECTED;
+    snap.servo_last_write_result = (uint8_t)s_mstate.last_write_result;
+    snap.servo_last_read_result  = (uint8_t)s_mstate.last_read_result;
+    snap.servo_feedback_age_ms = s_mstate.feedback_age_ms;
+    snap.servo_encoder_jump_count = s_mstate.encoder_jump_count;
+    snap.servo_stalled = s_mstate.is_stalled;
+    const float bus_deci = s_mstate.bus_target_deg * 10.0f;
+    const float trim_deci = s_mstate.position_trim_deg * 10.0f;
+    snap.servo_bus_target_ddeg = (int16_t)(bus_deci + (bus_deci >= 0.0f ? 0.5f : -0.5f));
+    snap.servo_position_trim_ddeg = (int16_t)(trim_deci + (trim_deci >= 0.0f ? 0.5f : -0.5f));
+    snap.servo_bus_target_valid = s_mstate.bus_target_valid;
+    snap.servo_position_trim_limited = s_mstate.position_trim_limited;
+    snap.servo_position_trim_blocked = s_mstate.position_trim_blocked;
+
+    snap.rc_link_up      = s_rc.is_link_up;
+    snap.vision_link_up  = s_vis.target_present;
+    snap.rc_ch1_percent  = s_rc.ch1_percent;
+    snap.servo_reconnect_guard = s_reconnect_guard_active;
+    snap.rc_last_ok_ms   = now_ms;      /* refined later when link timestamps tracked */
+    snap.vision_last_ok_ms = s_vis.last_update_tick_ms;
+
+    snap.last_update_tick_ms = now_ms;
+    snap.control_loop_count  = loop_count;
+
+    DataHub_Publish(&snap);
+}
+
+static void handle_debug_request(uint32_t now_ms)
+{
+    DebugRequest_t req;
+    if (!DebugRequest_TakePending(&req)) {
+        return;
+    }
+    switch (req.type) {
+    case DBG_REQ_TOGGLE_SERVO1_DEBUG:
+    case DBG_REQ_SELECT_HX8_DEBUG:
+        if (req.type == DBG_REQ_SELECT_HX8_DEBUG && !s_servo1_debug_active) {
+            s_debug_target = 2U;
+            s_force_active = false;
+            s_vofa_reset_pulse = true;
+            if (s_mstate.feedback_valid) TaskManipulator_SeedCurrentAngle(s_mstate.feedback.angle_deg);
+            BSP_UART_Printf("[VOFA] manual selected; ELRS not required; home-to-zero first; g <angle>, p <angle>, x=stop, f=reset\r\n");
+            break;
+        }
+        s_force_active = false;
+        TaskManipulator_CancelAutoCycle();
+        if (!s_servo1_debug_active) {
+            /* Send Stop/Unlock once before bypassing the main-arm loop. */
+            s_mcmd = (MotionCmd_t){ .torque_on = false, .force_update = true };
+            TaskMotion_Update(&s_mcmd, now_ms, &s_mstate);
+            s_servo1_debug_active = true;
+            s_debug_target = 1U;
+            s_ptk_gripper_force_deg = 90;
+            s_ptk_roll_force_deg = -1;
+            BSP_UART_Printf("[DEBUG] target=SERVO1; use p <angle>; h=HX8 s=normal\r\n");
+        } else {
+            s_servo1_debug_active = false;
+            s_debug_target = req.type == DBG_REQ_SELECT_HX8_DEBUG ? 2U : 0U;
+            s_vofa_reset_pulse = s_debug_target == 2U;
+            s_ptk_gripper_force_deg = -1;
+            s_servo_control_ready = false;
+            s_servo_was_control_ready = false;
+            s_reconnect_guard_active = true;
+            s_default_position_pending = true;
+            s_default_position_commanded = false;
+            ModStartupAngle_Reset(&s_startup_angle_gate);
+            ModHomeZero_Reset(&s_home_zero);
+            TaskVision_DiscardQueuedInput();
+            enter_phase(CTRL_PHASE_BOOT, now_ms);
+            BSP_UART_Printf("[DEBUG] target=%s; restart normal startup/home-to-zero checks\r\n",
+                            s_debug_target == 2U ? "HX8" : "NORMAL");
+        }
+        break;
+    case DBG_REQ_MOCK_VISION_TARGET:
+        TaskVision_MockInjectTarget((int16_t)req.arg1,
+                                    (req.arg2 > 0) ? (uint32_t)req.arg2 : 1000U,
+                                    now_ms);
+        break;
+    case DBG_REQ_MOCK_VISION_CLEAR:
+        TaskVision_MockClear();
+        break;
+    case DBG_REQ_CLEAR_FAULT:
+        if (s_debug_target == 2U) {
+            s_vofa_stopped = false;
+            s_vofa_reset_pulse = true;
+        }
+        if (s_phase == CTRL_PHASE_FAULT ||
+            (s_phase == CTRL_PHASE_SERVO_ENABLE && s_home_zero.stage == HOME_ZERO_FAILED)) {
+            s_ping_attempts = 0U;
+            ModStartupAngle_Reset(&s_startup_angle_gate);
+            enter_phase(CTRL_PHASE_SERVO_PING, now_ms);
+        }
+        break;
+    case DBG_REQ_FORCE_GOTO_ANGLE:
+        if (s_servo1_debug_active) {
+            BSP_UART_Printf("[SERVO1] HX8 angle commands disabled during debug\r\n");
+            break;
+        }
+        if (req.arg2 < 0) {
+            s_force_active = false;
+            if (s_debug_target == 2U) {
+                s_vofa_stopped = true;
+                BSP_UART_Printf("[VOFA] HX8 stop requested; f=reset before next move\r\n");
+            }
+            /* Reseed incremental accumulator so RC takes over from current position. */
+            if (s_mstate.feedback_valid) {
+                TaskRc_ReseedIncremental((int16_t)s_mstate.feedback.angle_deg);
+                TaskManipulator_SeedCurrentAngle(s_mstate.feedback.angle_deg);
+            }
+        } else {
+            if (s_debug_target == 2U && s_vofa_stopped) {
+                BSP_UART_Printf("[VOFA] stopped; send f before g <angle>\r\n");
+                break;
+            }
+            int32_t deg = req.arg1;
+            if (deg < TASK_MOTION_ANGLE_MIN_DEG) deg = TASK_MOTION_ANGLE_MIN_DEG;
+            if (deg > TASK_MOTION_ANGLE_MAX_DEG) deg = TASK_MOTION_ANGLE_MAX_DEG;
+            s_force_angle_deg = (int16_t)deg;
+            s_force_active    = true;
+        }
+        break;
+    case DBG_REQ_FORCE_PTK_ANGLE: {
+        int16_t *slot = (req.arg1 == 0) ? &s_ptk_gripper_force_deg
+                                        : &s_ptk_roll_force_deg;
+        if (req.arg2 < 0) {
+            *slot = -1;
+        } else {
+            int32_t deg = req.arg2;
+            if (deg < 0)   deg = 0;
+            if (deg > 180) deg = 180;
+            *slot = (int16_t)deg;
+        }
+        break;
+    }
+    case DBG_REQ_SWITCH_MODE:
+    case DBG_REQ_SET_ESTOP:
+    case DBG_REQ_CALIBRATE_ZERO:
+    default:
+        /* Forwarded into Arbiter input injection in a later iteration. */
+        break;
+    }
+}
+
+/* =============================================================================
+ * Bring-up phase steps
+ * ============================================================================= */
+
+static void step_boot(uint32_t now_ms)
+{
+    /* One-tick settle, then try to ping servo. */
+    (void)now_ms;
+    enter_phase(CTRL_PHASE_SERVO_PING, now_ms);
+    s_ping_attempts = 0U;
+    ModStartupAngle_Reset(&s_startup_angle_gate);
+}
+
+static void step_ping(uint32_t now_ms)
+{
+#if TASK_MOTION_USE_MOCK
+    /* Mock mode: skip right through to RUNNING. */
+    enter_phase(CTRL_PHASE_RUNNING, now_ms);
+#elif TASK_MOTION_SKIP_PING_FOR_BENCH
+    /* Bench mode: HX8 / UC01 not powered, only PTK end-effector under test.
+     * Pretend main arm is reachable so manipulator FSM is allowed to drive
+     * PA0/PA1. Caller must NOT issue MANUAL/AUTO motion commands. */
+    enter_phase(CTRL_PHASE_SERVO_CONFIG, now_ms);
+#else
+    /* Real mode: probe servo via TaskMotion_Update (ServoMonitor read). */
+    MotionCmd_t probe = {
+        .torque_on          = false,
+        .target_angle_deg   = 0.0f,
+        .velocity_deg_per_s = 0.0f,
+        .t_acc_ms           = 0U,
+        .t_dec_ms           = 0U,
+        .power_mw           = 0U,
+        .force_update       = true,
+    };
+    MotionState_t ms;
+    TaskMotion_Update(&probe, now_ms, &ms);
+    /* Publish failed Ping/Monitor diagnostics too. Without this assignment
+     * RTT misleadingly showed rd=0/fb_age=0 while USART2 received nothing. */
+    s_mstate = ms;
+    if (ModStartupAngle_Update(&s_startup_angle_gate, &ms.feedback,
+                               ms.servo_online && ms.feedback_valid,
+                               ms.feedback_fresh, now_ms)) {
+        s_startup_hold_angle_deg = ms.feedback.angle_deg;
+        seed_arm_target_from_encoder(ms.feedback.angle_deg);
+        enter_phase(CTRL_PHASE_SERVO_CONFIG, now_ms);
+    } else {
+        s_ping_attempts++;
+        if (s_ping_attempts > 150U) {   /* 3 s at 50 Hz */
+            enter_phase(CTRL_PHASE_FAULT, now_ms);
+        }
+    }
+#endif
+}
+
+static void step_config(uint32_t now_ms)
+{
+    s_home_checked = false;
+    ModHomeZero_Reset(&s_home_zero);
+    s_force_active = false;
+    /* Servo configuration is currently a no-op pass-through.
+     *
+     * step_ping above has already issued a torque-off ping plus an absolute
+     * encoder feedback read and confirmed servo_online. Anything beyond that
+     * (MODE / MIN / MAX / TORQUE_LIMIT / LOCK validation) would require:
+     *   - HX8/FSUS-compatible read helpers in drv_fsus
+     *   - a per-register readback against expected defaults
+     *   - a bring-up policy decision: read-only check, or auto-rewrite
+     *     EEPROM (which has limited write cycles)
+     *
+     * For demo_v7 the policy is: physically inspect / set EEPROM via the
+     * vendor utility once before first power-up. If a future regression
+     * makes this insufficient, escalate this stub to A2 in the bring-up
+     * notes (HX8/FSUS read helpers + per-register validation).
+     */
+    enter_phase(CTRL_PHASE_SERVO_ENABLE, now_ms);
+}
+
+static void step_enable(uint32_t now_ms)
+{
+    if (!s_home_checked) {
+        s_mcmd = (MotionCmd_t){ .torque_on = false, .force_update = true };
+        TaskMotion_Update(&s_mcmd, now_ms, &s_mstate);
+        if (!ModStartupAngle_Update(&s_startup_angle_gate, &s_mstate.feedback,
+                                    s_mstate.servo_online && s_mstate.feedback_valid,
+                                    s_mstate.feedback_fresh, now_ms)) {
+            enter_phase(CTRL_PHASE_SERVO_PING, now_ms);
+            return;
+        }
+        s_home_checked = true;
+        ModHomeZero_Reset(&s_home_zero);
+        return;
+    }
+    if (s_home_zero.stage == HOME_ZERO_FAILED && s_rc.is_link_up &&
+        s_rc.estop_state == ESTOP_RELEASED && s_rc.sys_reset_pulse) {
+        ModStartupAngle_Reset(&s_startup_angle_gate);
+        enter_phase(CTRL_PHASE_SERVO_PING, now_ms);
+        return;
+    }
+    const bool permitted = s_debug_target == 2U
+        ? ModVofaManual_Permitted(&s_rc, s_vofa_stopped)
+        : s_rc.is_link_up && s_rc.estop_state == ESTOP_RELEASED &&
+          (s_rc.req_mode == ARA_MODE_MANUAL || s_rc.req_mode == ARA_MODE_AUTO);
+    const bool torque = ModHomeZero_Update(&s_home_zero, &s_mstate.feedback,
+        s_mstate.servo_online && s_mstate.feedback_valid && !s_mstate.encoder_jump_suspected,
+        s_mstate.feedback_fresh, s_mstate.feedback_age_ms, permitted, now_ms);
+    s_mcmd = (MotionCmd_t){
+        .torque_on = torque, .target_angle_deg = ARA_MAIN_ARM_DEFAULT_ANGLE_DEG,
+        .velocity_deg_per_s = 80.0f, .t_acc_ms = 200U, .t_dec_ms = 200U,
+        .power_mw = TASK_MOTION_DEFAULT_POWER_MW, .force_update = false
+    };
+    TaskMotion_Update(&s_mcmd, now_ms, &s_mstate);
+    if (s_home_zero.stage != HOME_ZERO_DONE || !torque ||
+        s_mstate.is_stalled || s_mstate.is_overload || !s_mstate.feedback_valid) return;
+
+    /* Explicit homing is complete before any RC/vision target is considered. */
+    s_default_position_pending = false;
+    s_default_position_commanded = false;
+    s_reconnect_hold_angle_deg = ARA_MAIN_ARM_DEFAULT_ANGLE_DEG;
+    TaskRc_ReseedIncremental(ARA_MAIN_ARM_DEFAULT_ANGLE_DEG);
+    TaskManipulator_CancelAutoCycle();
+    TaskManipulator_SeedDefaultPosition();
+    s_servo_was_control_ready = true;
+    TaskVision_DiscardQueuedInput();
+    memset(&s_vis, 0, sizeof(s_vis));
+    enter_phase(CTRL_PHASE_RUNNING, now_ms);
+}
+
+static void step_fault(uint32_t now_ms)
+{
+    /* Startup reachability faults retry autonomously. Control recovery must
+     * not depend on an attached DAPLink/RTT console sending the 'f' key. */
+    if ((uint32_t)(now_ms - s_phase_enter_ms) >= APP_CONTROL_SERVO_RETRY_MS) {
+        s_ping_attempts = 0U;
+        ModStartupAngle_Reset(&s_startup_angle_gate);
+        enter_phase(CTRL_PHASE_SERVO_PING, now_ms);
+    }
+}
+
+static void step_running_force(uint32_t now_ms)
+{
+    TaskManipulator_CancelAutoCycle();
+    TaskVision_Update(now_ms, &s_vis);
+    apply_servo_link_safety(now_ms);
+
+    if (s_phase != CTRL_PHASE_RUNNING) return; /* Recovery now runs explicit homing. */
+
+    const bool force_feedback_ready =
+        s_mstate.servo_online &&
+        s_mstate.feedback_valid &&
+        (s_mstate.feedback_age_ms < APP_CONTROL_FORCE_FEEDBACK_MAX_AGE_MS);
+    const bool protected_stop = s_mstate.is_stalled || s_mstate.is_overload ||
+        s_mstate.encoder_jump_suspected || !s_servo_control_ready || s_fault_latched ||
+        (s_debug_target == 2U && !ModVofaManual_Permitted(&s_rc, s_vofa_stopped)) ||
+        (s_rc.is_link_up && s_rc.estop_state == ESTOP_ACTIVE);
+    if (!force_feedback_ready || protected_stop) {
+        /* RTT force mode is a diagnostic convenience, not a safety bypass.
+         * Drop it immediately when physical feedback is stale or stalled. */
+        s_mcmd.torque_on          = false;
+        s_mcmd.target_angle_deg   = (float)s_last_known_servo_angle_deg;
+        s_mcmd.velocity_deg_per_s = 0.0f;
+        s_mcmd.t_acc_ms           = 0U;
+        s_mcmd.t_dec_ms           = 0U;
+        s_mcmd.power_mw           = 0U;
+        s_mcmd.force_update       = false;
+        TaskMotion_Update(&s_mcmd, now_ms, &s_mstate);
+        s_force_active = false;
+        return;
+    }
+
+    s_mcmd.torque_on          = true;
+    s_mcmd.target_angle_deg   = (float)s_force_angle_deg;
+    s_mcmd.velocity_deg_per_s = TASK_MOTION_DEFAULT_VELOCITY;
+    s_mcmd.t_acc_ms           = TASK_MOTION_DEFAULT_T_ACC_MS;
+    s_mcmd.t_dec_ms           = TASK_MOTION_DEFAULT_T_DEC_MS;
+    s_mcmd.power_mw           = TASK_MOTION_DEFAULT_POWER_MW;
+    s_mcmd.force_update       = false;
+
+    if (s_debug_target == 2U) {
+        s_arb.mode = ARA_MODE_MANUAL;
+        s_arb.reason_code = ARB_REASON_MANUAL_VOFA;
+        s_arb.target_angle_deg = s_force_angle_deg;
+        s_arb.torque_request = true;
+    }
+    TaskMotion_Update(&s_mcmd, now_ms, &s_mstate);
+    if (s_debug_target == 2U && s_ptk_gripper_force_deg >= 0) {
+        (void)TaskManipulator_DriveServo1Only((uint8_t)s_ptk_gripper_force_deg);
+        s_arb.gripper_angle = (uint8_t)s_ptk_gripper_force_deg;
+    }
+}
+
+static void step_running_normal(uint32_t now_ms)
+{
+    TaskVision_Update(now_ms, &s_vis);
+
+    /* Bumpless AUTO -> MANUAL transfer. During AUTO the CH1 incremental
+     * accumulator is intentionally frozen, so without reseeding it the first
+     * MANUAL tick could command the pre-AUTO angle. Hand control back at the
+     * latest encoder position instead. Update this tick's RC snapshot too so
+     * there is no one-cycle stale command. */
+    if ((s_arb.mode == ARA_MODE_AUTO) &&
+        (s_rc.req_mode == ARA_MODE_MANUAL) &&
+        s_mstate.feedback_valid) {
+        int16_t current_deg = (int16_t)s_mstate.feedback.angle_deg;
+        TaskRc_ReseedIncremental(current_deg);
+        s_rc.incremental_angle_deg = current_deg;
+    }
+
+    apply_servo_link_safety(now_ms);
+
+    if (s_phase != CTRL_PHASE_RUNNING) return;
+    RcControlData_t vofa_rc;
+    const RcControlData_t *control_rc = &s_rc;
+    if (s_debug_target == 2U) {
+        vofa_rc = ModVofaManual_Intent(&s_rc, s_vofa_stopped, s_vofa_reset_pulse,
+                                     s_ptk_gripper_force_deg >= 0 ? (uint8_t)s_ptk_gripper_force_deg : 90U);
+        control_rc = &vofa_rc;
+    }
+    ArbiterInput_t in = {
+        .rc              = control_rc,
+        .vision          = &s_vis,
+        .servo_online    = s_servo_control_ready,
+        .servo_stall_active = s_mstate.is_stalled,
+        .tick_ms         = now_ms,
+        .prev_mode       = s_arb.mode,
+        .vision_stale_ms = ARBITER_DEFAULT_VISION_STALE_MS,
+        .fault_latched   = s_fault_latched,
+    };
+    TaskArbiter_Decide(&in, &s_arb);
+    if (s_debug_target == 2U && s_arb.reason_code == ARB_REASON_MANUAL_RC)
+        s_arb.reason_code = ARB_REASON_MANUAL_VOFA;
+    if (s_debug_target == 2U) s_vofa_reset_pulse = false;
+
+    /* Two-step reset side effects: when arbiter consumes sys_reset_pulse,
+     * reseed CH1 incremental accumulator to current servo position so
+     * MANUAL re-entry starts from wherever the arm physically is. */
+    if (s_arb.fault_reset_consumed) {
+        int16_t cur = s_mstate.feedback_valid
+                      ? (int16_t)s_mstate.feedback.angle_deg : 0;
+        TaskRc_ReseedIncremental(cur);
+    }
+    s_fault_latched = s_arb.fault_latched_next;
+
+    /* The requested default is an intentional 0-degree command. Apply it
+     * once after stable startup/reconnection, under the normal RC/estop gate. */
+    if (s_default_position_pending && s_servo_control_ready &&
+        (s_arb.mode == ARA_MODE_MANUAL || s_arb.mode == ARA_MODE_AUTO)) {
+        TaskManipulator_SeedDefaultPosition();
+        TaskRc_ReseedIncremental(ARA_MAIN_ARM_DEFAULT_ANGLE_DEG);
+        s_rc.incremental_angle_deg = ARA_MAIN_ARM_DEFAULT_ANGLE_DEG;
+        s_reconnect_hold_angle_deg = ARA_MAIN_ARM_DEFAULT_ANGLE_DEG;
+        if (s_arb.mode == ARA_MODE_MANUAL) {
+            s_arb.target_angle_deg = ARA_MAIN_ARM_DEFAULT_ANGLE_DEG;
+        }
+        s_default_position_pending = false;
+        s_default_position_commanded = true;
+    }
+    if (s_arb.mode == ARA_MODE_AUTO && s_arb.reason_code == ARB_REASON_AUTO_VISION_FRESH) {
+        s_default_position_commanded = false; /* Explicit vision overrides the default. */
+    }
+
+    /* Console PTK force overrides take priority over arbiter for the
+     * named end-effector channels only. HX8 main arm path is unchanged. */
+    if (s_ptk_gripper_force_deg >= 0) {
+        s_arb.gripper_angle = (uint8_t)s_ptk_gripper_force_deg;
+        s_arb.gripper_override_enabled = true;
+    }
+    if (s_ptk_roll_force_deg >= 0) {
+        s_arb.roll_degree = (uint8_t)s_ptk_roll_force_deg;
+    }
+
+    TaskManipulator_Update(&s_arb, &s_mstate, now_ms, &s_mcmd);
+    s_arb.gripper_angle = TaskManipulator_GetGripperAngle();
+    if (s_arb.mode == ARA_MODE_AUTO) {
+        s_arb.target_angle_deg = s_mcmd.target_angle_deg;
+    }
+
+    TaskMotion_Update(&s_mcmd, now_ms, &s_mstate);
+}
+
+static void step_running(uint32_t now_ms)
+{
+    /* Selecting AUTO is an explicit handover from console diagnostics.
+     * Old g/p overrides must not hide the requested mode or keep the claw shut. */
+    if (s_debug_target != 2U && s_rc.is_link_up && s_rc.req_mode == ARA_MODE_AUTO &&
+        s_last_rc_requested_mode != ARA_MODE_AUTO) {
+        s_force_active = false;
+        s_ptk_gripper_force_deg = -1;
+        s_ptk_roll_force_deg = -1;
+        TaskManipulator_CancelAutoCycle();
+    }
+    s_last_rc_requested_mode = s_rc.is_link_up ? s_rc.req_mode : ARA_MODE_INIT;
+    if (s_force_active) {
+        step_running_force(now_ms);
+    } else {
+        step_running_normal(now_ms);
+    }
+}
+
+/* =============================================================================
+ * Task entry
+ * ============================================================================= */
+
+static void ControlTaskEntry(void *arg)
+{
+    (void)arg;
+    TickType_t last_wake = xTaskGetTickCount();
+    uint32_t   loop_cnt  = 0U;
+
+    for (;;) {
+        const uint32_t now_ms = osKernelGetTickCount();
+
+        handle_debug_request(now_ms);
+
+        /* RC parsing must run every tick regardless of phase, so channel
+         * sniffing and link-health observation work even when servo
+         * bring-up fails (or no servo is attached during RC-only tests). */
+        TaskRc_Update(now_ms, &s_rc);
+
+#if APP_CONTROL_SERVO1_ONLY
+        s_force_active = false;
+        s_arb.mode = ARA_MODE_MANUAL;
+        s_arb.target_angle_deg = 0;
+        s_arb.torque_request = false;
+        s_arb.roll_degree = 0;
+        s_arb.gripper_angle = s_ptk_gripper_force_deg >= 0
+                                ? (uint8_t)s_ptk_gripper_force_deg : 90U;
+        (void)TaskManipulator_DriveServo1Only(s_arb.gripper_angle);
+        /* No TaskMotion, homing, arbiter, roll or vision-control execution. */
+        s_phase = CTRL_PHASE_RUNNING;
+#else
+        if (s_servo1_debug_active) {
+            uint8_t angle = s_ptk_gripper_force_deg >= 0 ? (uint8_t)s_ptk_gripper_force_deg : 90U;
+            (void)TaskManipulator_DriveServo1Only(angle);
+            s_arb.gripper_angle = angle;
+            s_arb.roll_degree = 0;
+            s_arb.torque_request = false;
+            s_arb.target_angle_deg = 0;
+            /* No TaskMotion, arbiter, homing or vision actions in this mode. */
+        } else {
+        switch (s_phase) {
+        case CTRL_PHASE_BOOT:         step_boot(now_ms);    break;
+        case CTRL_PHASE_SERVO_PING:   step_ping(now_ms);    break;
+        case CTRL_PHASE_SERVO_CONFIG: step_config(now_ms);  break;
+        case CTRL_PHASE_SERVO_ENABLE: step_enable(now_ms);  break;
+        case CTRL_PHASE_RUNNING:      step_running(now_ms); break;
+        case CTRL_PHASE_FAULT:        step_fault(now_ms);   break;
+        default:
+            enter_phase(CTRL_PHASE_FAULT, now_ms);
+            break;
+        }
+        }
+#endif
+
+        publish_hub(now_ms, loop_cnt);
+        loop_cnt++;
+
+        s_heartbeat_ms = now_ms;
+        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(ARA_PERIOD_CONTROL_MS));
+    }
+}
+
+/* =============================================================================
+ * Lifecycle API
+ * ============================================================================= */
+
+void App_Control_InitDeps(void)
+{
+    DebugRequest_Init();
+    DataHub_Init();
+
+    TaskRc_Init();
+    TaskVision_Init();
+    TaskManipulator_Init();
+    TaskMotion_Init();
+
+    memset(&s_rc,     0, sizeof(s_rc));
+    memset(&s_vis,    0, sizeof(s_vis));
+    memset(&s_arb,    0, sizeof(s_arb));
+    memset(&s_mcmd,   0, sizeof(s_mcmd));
+    memset(&s_mstate, 0, sizeof(s_mstate));
+
+    s_phase          = CTRL_PHASE_BOOT;
+    s_servo1_debug_active = false;
+    s_debug_target = 0U;
+    s_vofa_stopped = false;
+    s_vofa_reset_pulse = false;
+    s_phase_enter_ms = 0U;
+    s_startup_hold_angle_deg = 0.0f;
+    s_default_position_pending = true;
+    s_default_position_commanded = false;
+    ModStartupAngle_Reset(&s_startup_angle_gate);
+    ModStartupAngle_Reset(&s_recovery_angle_gate);
+    ModHomeZero_Reset(&s_home_zero);
+    s_home_checked = false;
+    s_heartbeat_ms   = 0U;
+    s_fault_latched  = false;
+    s_last_rc_requested_mode = ARA_MODE_INIT;
+    s_servo_control_ready = false;
+    s_servo_was_control_ready = false;
+    s_reconnect_guard_active = true;
+    s_reconnect_center_since_ms = 0U;
+    s_reconnect_hold_angle_deg = 0;
+    s_last_known_servo_angle_deg = 0;
+    s_last_known_servo_angle_valid = false;
+}
+
+void App_Control_Init(void)
+{
+    const osThreadAttr_t attr = {
+        .name       = "ControlTask",
+        .stack_size = ARA_STACK_CONTROL_BYTES,
+        .priority   = ARA_PRIO_CONTROL,
+    };
+    s_control_handle = osThreadNew(ControlTaskEntry, NULL, &attr);
+}
+
+uint32_t App_Control_GetHeartbeatMs(void)
+{
+    return s_heartbeat_ms;
+}
+
+bool App_Control_IsServo1Debug(void)
+{
+    return s_servo1_debug_active;
+}
+
+uint8_t App_Control_GetDebugTarget(void)
+{
+    return s_debug_target;
+}
+
+bool App_Control_IsVofaManual(void)
+{
+    return s_debug_target == 2U && !s_servo1_debug_active;
+}
+
+bool App_Control_GetForceState(int16_t *out_angle_deg)
+{
+    if ((out_angle_deg != NULL) && s_force_active) {
+        *out_angle_deg = s_force_angle_deg;
+    }
+    return s_force_active;
+}

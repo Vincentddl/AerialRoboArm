@@ -1,0 +1,118 @@
+/**
+ * @file task_motion.h
+ * @brief FSUS servo proxy (L4).
+ *
+ * Motion is a thin agent over the FSUS bus:
+ *   - Encode target / read feedback via drv_fsus.
+ *   - Issue transactions via bsp_uart FSUS API (blocking TX + interrupt RX).
+ *
+ * MOCK mode simulates a first-order tracker producing plausible feedback.
+ * Set TASK_MOTION_USE_MOCK=0 when the HX8-U26H-M is physically connected.
+ */
+
+#ifndef TASK_MOTION_H
+#define TASK_MOTION_H
+
+#include "ara_def.h"
+#include "drv_fsus.h"
+
+/* ============================================================================
+ * Compile-time configuration
+ * ============================================================================= */
+
+#ifndef TASK_MOTION_USE_MOCK
+#define TASK_MOTION_USE_MOCK            (0)
+#endif
+
+/**
+ * @brief When set, the bring-up FSM skips the FSUS ping and pretends the
+ *        main-arm servo is online. Use this **only** when bench-testing the
+ *        PA0/PA1 PTK end-effector servos without the HX8 / UC01 powered up.
+ *        With this on, do NOT command the main arm — fault detection is
+ *        disabled. Turn back to 0 before any flight bring-up.
+ */
+#ifndef TASK_MOTION_SKIP_PING_FOR_BENCH
+#define TASK_MOTION_SKIP_PING_FOR_BENCH (0)
+#endif
+
+#define TASK_MOTION_SERVO_ID            (0U)    /**< Default FSUS servo ID. */
+
+#define TASK_MOTION_ANGLE_MIN_DEG       ARA_MAIN_ARM_ANGLE_MIN_DEG /**< Forward mechanical limit. */
+#define TASK_MOTION_ANGLE_MAX_DEG       ARA_MAIN_ARM_ANGLE_MAX_DEG /**< Backward mechanical limit. */
+
+#define TASK_MOTION_DEFAULT_VELOCITY    (220.0f)/**< Manual servo speed above the 150 deg/s target rate. */
+#define TASK_MOTION_DEFAULT_T_ACC_MS    (100U)  /**< Manual acceleration ramp. */
+#define TASK_MOTION_DEFAULT_T_DEC_MS    (100U)  /**< Manual braking ramp. */
+#define TASK_MOTION_DEFAULT_POWER_MW    (0U)    /**< 0 = servo auto-calc. */
+#define TASK_MOTION_AUTO_VELOCITY_MIN   (20.0f) /**< Lowest accepted non-zero HC13 AUTO speed. */
+#define TASK_MOTION_AUTO_VELOCITY_MAX   (500.0f)/**< Software cap; loaded mechanism safety requires measurement. */
+#define TASK_MOTION_AUTO_VELOCITY       TASK_MOTION_AUTO_VELOCITY_MAX /**< speed=0 selects the software cap. */
+/* At the 500 deg/s software cap, 100 ms ramps imply 5000 deg/s^2
+ * under a linear-ramp approximation. The protocol's
+ * 20 ms minimum is not a validated minimum safe time for the mechanism. */
+#define TASK_MOTION_AUTO_T_ACC_MS       (100U)
+#define TASK_MOTION_AUTO_T_DEC_MS       (100U)
+#define TASK_MOTION_ONLINE_GRACE_MS     (3000U) /**< Ignore brief telemetry dropouts. */
+#define TASK_MOTION_FEEDBACK_PERIOD_MS  (100U)  /**< ServoMonitor polling period. */
+#define TASK_MOTION_COMMAND_REFRESH_MS  (1000U) /**< Lower-rate held-target retry; fresh position queries still run at 10 Hz. */
+#ifndef TASK_MOTION_POSITION_TRIM_ENABLE
+#define TASK_MOTION_POSITION_TRIM_ENABLE (1)   /**< Bounded correction only after goal and encoder settle. */
+#endif
+#define TASK_MOTION_TARGET_INTERVAL_MS  (40U)   /**< Avoid restarting the servo trajectory every 20 ms. */
+#define TASK_MOTION_STOP_REFRESH_MS     (200U)  /**< Repeat idempotent Stop while torque is disabled. */
+
+/* ============================================================================
+ * Command / state types
+ * ============================================================================= */
+
+typedef struct {
+    bool     torque_on;              /**< false = send Stop(unlock). */
+    float    target_angle_deg;       /**< Commanded angle, clamped to -90..+85. */
+    float    velocity_deg_per_s;     /**< Traverse speed. */
+    uint16_t t_acc_ms;               /**< Accel time, >= 20. */
+    uint16_t t_dec_ms;               /**< Decel time, >= 20. */
+    uint16_t power_mw;               /**< Execution power, 0 = servo default. */
+    bool     force_update;           /**< Bypass change detection. */
+} MotionCmd_t;
+
+typedef struct {
+    /* --- This-tick IO outcome --- */
+    FsusParseResult_t   last_write_result;
+    FsusParseResult_t   last_read_result;
+
+    /* --- Latest feedback --- */
+    FsusFeedback_t      feedback;
+    bool                feedback_valid;
+    bool                feedback_fresh; /**< True only for a new valid monitor frame this tick. */
+    uint32_t            feedback_age_ms;/**< Age of the latest valid physical feedback. */
+
+    /* --- Motion status (simplified) --- */
+    bool                is_moving;      /**< Estimated from angle delta. */
+    bool                is_stalled;     /**< BIT2 in servo status byte. */
+    bool                is_overload;    /**< Any fault bit set. */
+    bool                encoder_jump_suspected; /**< New feedback exceeded physical plausibility. */
+    uint32_t            encoder_jump_count;     /**< Persistent suspected-jump counter. */
+    float               encoder_delta_deg;     /**< Delta between the latest two fresh frames. */
+    float               bus_target_deg;        /**< Last successfully sent target, including trim. */
+    float               position_trim_deg;     /**< Controller correction request, maximum +/-1.5 deg. */
+    bool                bus_target_valid;
+    bool                position_trim_limited;
+    bool                position_trim_blocked;
+
+    /* --- Link health --- */
+    bool                servo_online;
+} MotionState_t;
+
+/* ============================================================================
+ * API
+ * ============================================================================= */
+
+void TaskMotion_Init(void);
+void TaskMotion_SetPositionTrimEnabled(bool enabled);
+bool TaskMotion_IsPositionTrimEnabled(void);
+
+void TaskMotion_Update(const MotionCmd_t *cmd,
+                       uint32_t           tick_ms,
+                       MotionState_t     *state);
+
+#endif /* TASK_MOTION_H */

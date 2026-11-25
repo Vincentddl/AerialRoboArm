@@ -1,0 +1,48 @@
+# 视频与大型原始采集媒体（严禁入库，说明见 VIDEO_MANIFEST.md）
+*.avi
+*.mp4
+*.mov
+*.mkv
+*.wmv
+*.flv
+*.webm
+
+# STM32 / CMake / IDE 编译产物
+cmake-build-*/
+build/
+build_*/
+.idea/
+.settings/
+*.cmake.user
+*.o
+*.d
+*.elf
+*.hex
+*.bin
+*.map
+toolchain.cmake
+
+# Python 虚拟环境、缓存与训练中间产物
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+venv*/
+vendor/
+host_console_vision/runtime/datasets/
+host_console_vision/runtime/yolo26_runs/
+*.log
+
+# SolidWorks 临时锁文件
+~$*.SLDPRT
+~$*.SLDASM
+*.bak
+
+# 本地演示文稿与无关临时文件
+*.pptx
+*.docx
+*.xlsx
+*.lnk
+.env
+.claude/
+.agents/

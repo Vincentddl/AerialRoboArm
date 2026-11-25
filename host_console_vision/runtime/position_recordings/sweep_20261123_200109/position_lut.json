@@ -1,0 +1,103 @@
+{
+  "type": "calibrated_position_lut",
+  "name": "rig_position_lut_20261123_200609",
+  "created_at": "2026-11-23T20:06:09+08:00",
+  "frame_height": 480,
+  "working_zero_mdeg": 90000,
+  "extension_sign": -1,
+  "monotonic": true,
+  "points": [
+    {
+      "guide_extension_deg": 30.0,
+      "extension_deg": 28.8,
+      "center_y_px": 370.469,
+      "hold_count": 2,
+      "sample_count": 181,
+      "hysteresis_y_px": 0.368,
+      "hysteresis_encoder_deg": 0.8
+    },
+    {
+      "guide_extension_deg": 35.0,
+      "extension_deg": 34.45,
+      "center_y_px": 343.087,
+      "hold_count": 2,
+      "sample_count": 152,
+      "hysteresis_y_px": 5.275,
+      "hysteresis_encoder_deg": 0.1
+    },
+    {
+      "guide_extension_deg": 40.0,
+      "extension_deg": 39.3,
+      "center_y_px": 312.616,
+      "hold_count": 2,
+      "sample_count": 88,
+      "hysteresis_y_px": 1.826,
+      "hysteresis_encoder_deg": 0.4
+    },
+    {
+      "guide_extension_deg": 45.0,
+      "extension_deg": 44.25,
+      "center_y_px": 284.998,
+      "hold_count": 2,
+      "sample_count": 174,
+      "hysteresis_y_px": 1.551,
+      "hysteresis_encoder_deg": 0.5
+    },
+    {
+      "guide_extension_deg": 50.0,
+      "extension_deg": 48.9,
+      "center_y_px": 259.191,
+      "hold_count": 2,
+      "sample_count": 153,
+      "hysteresis_y_px": 0.748,
+      "hysteresis_encoder_deg": 0.6
+    },
+    {
+      "guide_extension_deg": 55.0,
+      "extension_deg": 53.8,
+      "center_y_px": 232.167,
+      "hold_count": 2,
+      "sample_count": 181,
+      "hysteresis_y_px": 1.268,
+      "hysteresis_encoder_deg": 0.7
+    },
+    {
+      "guide_extension_deg": 60.0,
+      "extension_deg": 58.8,
+      "center_y_px": 207.632,
+      "hold_count": 2,
+      "sample_count": 181,
+      "hysteresis_y_px": 2.046,
+      "hysteresis_encoder_deg": 0.4
+    },
+    {
+      "guide_extension_deg": 65.0,
+      "extension_deg": 63.5,
+      "center_y_px": 182.749,
+      "hold_count": 2,
+      "sample_count": 181,
+      "hysteresis_y_px": 3.676,
+      "hysteresis_encoder_deg": 0.7
+    },
+    {
+      "guide_extension_deg": 70.0,
+      "extension_deg": 68.4,
+      "center_y_px": 157.674,
+      "hold_count": 1,
+      "sample_count": 91,
+      "hysteresis_y_px": null,
+      "hysteresis_encoder_deg": null
+    }
+  ],
+  "hysteresis_summary": {
+    "max_y_px": 5.275,
+    "mean_y_px": 2.095,
+    "max_encoder_deg": 0.8,
+    "mean_encoder_deg": 0.525
+  },
+  "source": {
+    "video": "runtime\\position_recordings\\sweep_20261123_200109\\sweep_20261123_200109.avi",
+    "events": "runtime\\position_recordings\\sweep_20261123_200109\\sweep_20261123_200109.angles.jsonl",
+    "total_holds": 17
+  }
+}

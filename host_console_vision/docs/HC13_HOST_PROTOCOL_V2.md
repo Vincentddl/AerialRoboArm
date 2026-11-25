@@ -1,0 +1,118 @@
+# HC13统一调试协议 V2
+
+适用：`HC13_HOST_LINK=ON`的HX8/JY61P实验构建。更新：2026-11-07。格式依据`mod_hc13_host.c`，不适用于正式控制固件的持续视觉跟随协议。
+
+V2共享一个USART3处理控制与遥测，保留JY61P内部采集、夹爪独立调试和记录开关。程序构建、软件测试、历史查询往返及真实机构动作分别验证，不能互相代替。
+
+## 传输和单位
+
+- HC13连接USART3 PB10/PB11，230400、8N1；单个串口统一双向收发。
+- ASCII英文逗号分隔、LF结束，接收兼容CRLF。有效载荷最多160字节，完整帧后解析；禁止空字段、非法数字和超限值。
+- 位置及角度全部为mdeg，包括V帧；速度为°/s，时间为ms。未标定或无有效测量使用NA。
+- INFO版本号为2，CAL包含14字段。V1不能直接连此构建，也不再接受V1整数度、speed=0和第五稳定帧字段。
+- MCU样本接收时间不等于传感器内部采样时间或PC接收时间。ACC单位mg，包含重力。
+
+## 当前配置
+
+配置：`User/app/Inc/app_hc13_host_config.h`。
+
+| 项目 | 程序配置 |
+| --- | --- |
+| HOME、NORMAL、PREP竖直位 | 同一HOST_VERTICAL_MDEG，当前编码器0° |
+| 伸出方向和软件范围 | 负向；HC13实验构建−90°～+100°，正式RC构建仍为−90°～+85° |
+| 最大速度 | 500°/s软件上限，非实测带载安全保证 |
+| 普通MOVE/PICK加减速 | 各100 ms |
+| 准备/折叠移动 | 30°/s，加减速各500 ms |
+| SERVO1张开/闭合预设 | 110°/90°，只有PWM命令，没有实测夹持反馈 |
+| 开爪、闭爪等待时间 | 用户确认没有实测值；配置−1，对外发布NA |
+| 后折位置 | MCU原生SHAPE标定仍为NA；PC实验折叠预设暂为+100°，机械安全边界尚待实测 |
+| 提前闭爪角 | 默认4°，PICK允许3～5°、0.1°步进 |
+| 视觉候选置信阈值/期限 | 60%，500 ms |
+
+MCU原生HOME/PREP/SHAPE仍要求相应等待或折叠标定，缺失时返回NOT_CALIBRATED。PC实验的+50°工作位、暂定+100°折叠位使用普通MOVE与显式SERVO操作，不冒充MCU原生HOME/SHAPE标定。
+
+## PC→MCU
+
+| 报文 | 作用 |
+| --- | --- |
+| `GET,id,INFO` / `GET,id,CAL` / `GET,id,STATE` | 只查询，不触发机构动作 |
+| `PING,id` | 心跳，返回PONG |
+| `MODE,id,MANUAL` / `VISION_DEMO` / `VISION_PICK` | 只改变路由，取消旧准备/候选/待闭爪流程；不自动回零或开爪 |
+| `HOME,id` / `SHAPE,id,NORMAL` / `PREP,id` | 同一准备流程：低速到竖直位→实际反馈确认→开爪PWM→等待标定时间→READY→DONE |
+| `SHAPE,id,FOLDED` | 先闭爪PWM→等待标定时间→向已标定位置后折→反馈确认→DONE |
+| `PICK,id,target_mdeg,speed_dps,lead_mdeg` | MCU READY竖直位，或PC实验+50°工作位／+100°折叠位且已应用开爪PWM时，接受一次锁定参数的联动抓取 |
+| `V,target_mdeg,speed_dps,confidence` | VISION_PICK且READY时只更新最新候选，不驱动HX8 |
+| `TRIGGER,id` | 使用500 ms内的最新候选及默认提前量，触发一次PICK；消费候选 |
+| `MOVE,id,target_mdeg,speed_dps` | 普通位置调试，不需要准备，不自动闭爪；仅MANUAL |
+| `STOP,id` | 中止流程，取消所有待闭爪/候选/准备，尽可能保持HX8；已应用的夹爪PWM保持 |
+| `GRIP,id,OPEN` / `CLOSE` | 独立夹爪命令；不等于夹持成功，执行后取消READY |
+| `SERVO,id,1,angle_mdeg` | MANUAL下独立SERVO1角度调试，整度步进，执行后取消READY |
+| `RECORD,id,1` / `0` | 实验记录门控，动作中拒绝切换；启用需有效200 Hz数据 |
+
+HC13实验构建MOVE/PICK角度范围−90000～100000，MOVE/PICK目标按100 mdeg步进，速度1～500。PICK的lead为3000～5000、按100 mdeg步进。SERVO角度0～180000，按1000 mdeg步进；仍受实际机构限制。
+
+HOME/NORMAL仅MANUAL；PREP允许MANUAL和VISION_PICK；PICK允许MANUAL和VISION_PICK；TRIGGER仅VISION_PICK。VISION_DEMO不执行机构流程。独立GRIP仅在没有运行中的自动流程时执行。
+
+## MCU→PC
+
+```text
+INFO,<id>,2,<boot_id>,<last_req_id>,230400,200,20,<max_speed>,<ramp_ms>,<post_ms>,<min_conf>,500
+CAL,<id>,<vertical_mdeg>,<vertical_mdeg>,<extension_sign>,<max_extension_mdeg>,<folded_mdeg>,<open_mdeg>,<close_mdeg>,0,180000,<open_wait_ms>,<close_wait_ms>,<default_lead_mdeg>
+ACC,<seq>,<sample_ms>,<ax_mg>,<ay_mg>,<az_mg>
+STATE,<t_ms>,<mode>,<shape>,<motion>,<hx8_online>,<imu_online>,<pos_mdeg>,<target_mdeg>,<voltage_mv>,<imu_hz>,<record_on>,<acc_tx>,<grip_cmd_mdeg>,<grip_action>,<last_req_id>,<fault_code>,<reply_to>
+ACK,<id>,<verb>,<result>
+MOTION,<id>,<stage>,<t_ms>,<target_mdeg>,<pos_mdeg|NA>,<reason>
+DONE,<id>,<verb>,<actual_pos_mdeg>
+ERR,<id>,<code>
+PONG,<id>,<t_ms>
+```
+
+STATE字段沿用V1的18字段定义，但主要按GET STATE回复，不主动高频广播；阶段变化用MOTION。ACC在MANUAL和VISION_DEMO约20 Hz，VISION_PICK停止无线传感器流，内部JY61P继续采样。
+
+MOTION阶段：PREPARING、OPEN_APPLIED、READY、START、CLOSE_APPLIED、ARRIVED、END、ABORT。OPEN/CLOSE_APPLIED仅说明PWM已应用。READY先于准备DONE；任何STOP、MODE变化、故障、失联会取消READY及候选，迟到事件不得重新使能动作。
+
+长动作ACK为ACCEPTED；独立PWM/STOP为APPLIED；MODE为实际模式名；RECORD为ON/OFF。只有DONE说明相应位置/准备流程完成，且仍不代表物体已被夹住。
+
+正式默认标定回复示例：
+
+```text
+CAL,402,0,0,-1,90000,NA,110000,90000,0,180000,NA,NA,4000
+```
+
+## 单次联动判定
+
+1. MCU原生准备后的PICK要求READY且实际位置接近竖直位，并要求夹爪及开闭等待已标定。PC实验路径可从+50°或+100°起步，但必须已有显式110°开爪PWM命令、HX8稳定门控和健康新鲜反馈；夹爪实际位置无反馈，不能把PWM回执视为机械已张开。
+2. 目标必须在前伸软件范围内、沿配置方向前进；实际起点到目标行程必须大于提前量。
+3. PICK/TRIGGER接受后锁定目标、速度和提前量，清除READY及候选；后续V不能改动本动作。
+4. 只用新的feedback_seq和有效实际角度判断进度。允许采样跨过阈值，不要求恰好采到目标前4°。缓存同一帧不能推进闭爪条件。
+5. 第一次跨过阈值后应用闭爪PWM并锁存，本动作最多一次。STOP/MODE/故障后的旧反馈不能迟到触发。
+6. 实际到位、实验续录窗口及已配置闭爪等待均结束后才DONE。PC实验路径的闭爪等待未标定，当前为0 ms，仅表示PWM已应用，不表示夹持完成。位置失败、准备失败或反馈过期只能ABORT/ERR。
+
+PICK运动阶段向HX8请求5 ms轮询间隔，实际频率受串口5 ms帧间隔、回复耗时和硬件刷新率限制，不能宣称已实测200 Hz。到位仍保留约200 ms安静确认，避免高频查询把稳定判断缩短为几十毫秒。其他动作保持原50 ms轮询。
+
+## 当前PC实验动作序列
+
+上位机的正常／归零：MOVE到+50°，收到DONE后SERVO 110°开爪。折叠：先SERVO 110°开爪，再MOVE到暂定+100°。手动“按参数抓取”和视觉单次触发共用PICK，不由PC延时补发SERVO：MCU用新鲜HX8实际角度跨过目标前4°阈值时应用一次闭爪PWM 90°，HX8继续到目标。PC只在PICK DONE后取得新鲜无故障IDLE和闭爪命令状态时发送MOVE回到本次起点（+50°或+100°）。普通MOVE仍是位置调试，不联动夹爪。CLOSE_APPLIED只证明PWM命令已应用，无法证明抓住物体。
+
+HX8移动期间监测回复可有短暂延迟：MCU当前将反馈时间宽限设为400 ms，空闲和新动作准入仍要求200 ms内的反馈；状态位异常、电压越界或持续缺帧仍停止并锁定故障。此调整不保证任意速度可靠，需用实物及RTT的`[HX8]`记录复测。
+
+## 记录、故障和事务
+
+- 保留JY61P约200 Hz与RTT完整记录；HC13的ACC只是20 Hz显示流，不是完整实验文件。RECORD ON/DONE不等于PC已经保存成功。
+- 上电只初始化和查询，不自动回零、开爪、闭爪。TIM2只在明确PWM操作时启动。
+- 请求序号匹配、内容冲突、旧请求拒绝与回复缓存保留；重复同帧不会重复移动、开爪或重置闭爪锁存。
+- 关键MOTION事件单独缓存；无线发送背压不推迟本地角度阈值判定。READY/事件按序发出后再发DONE。
+- 3秒没有有效PC消息会中止该无线会话的活动流程；只有查询的连接不会超时触发机构动作。
+- 接收损坏后丢弃残帧并取消准备/候选。FAULT、FEEDBACK_STALE、MOTION_TIMEOUT等错误保留；底层TX_FAILED映射为新版解析器认识的FAULT。
+- MCU原生SHAPE折叠及准备等待仍未实测，默认NA会阻止这些原生命令；PC实验MOVE/SERVO/PICK路径单独运行，+100°折叠和高速动作仍需机构验证。
+
+## 验证与构建
+
+```powershell
+.\tools\test_hc13_host.ps1
+.\tools\build_hc13_host.ps1
+```
+
+本MCU仓库使用 `tests/test_hc13_host.c` 和 `tools/test_hc13_host.ps1` 验证实际C协议模块。电脑端互通测试随外部上位机项目提供，不在本仓库内；HAL和执行器使用模拟，不能代替实物验证。V2专用固件约FLASH35.4 KB、RAM13.8 KB，不是默认正式控制固件的大小。
+
+使用顺序与构建见 [HC13_HOST_BUILD.md](./HC13_HOST_BUILD.md)：先只读确认INFO/CAL/STATE/ACC，再核对标定及机构条件，由操作者明确启动动作。

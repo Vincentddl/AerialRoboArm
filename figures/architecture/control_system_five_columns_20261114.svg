@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2040" height="990" viewBox="0 0 2040 990">
+<rect width="100%" height="100%" fill="white"/>
+<text x="1020" y="43" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="35" font-weight="700" fill="#111111">机械臂控制系统总体分层架构</text>
+<rect x="20" y="195" width="290" height="600" rx="0" fill="white" stroke="#111111" stroke-width="2"/>
+<text x="165.0" y="221" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="26" font-weight="700" fill="#111111">执行与反馈层</text>
+<rect x="45" y="265" width="240" height="110" rx="0" fill="white" stroke="#111111" stroke-width="2"/>
+<text x="165.0" y="303.0" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="24" font-weight="400" fill="#111111">HX8 主臂舵机</text>
+<text x="165.0" y="337.0" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="21" font-weight="400" fill="#111111">舵机内部位置闭环</text>
+<rect x="45" y="460" width="240" height="90" rx="0" fill="white" stroke="#111111" stroke-width="2"/>
+<text x="165.0" y="505.0" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="24" font-weight="400" fill="#111111">夹爪 PWM 舵机</text>
+<rect x="45" y="640" width="240" height="100" rx="0" fill="white" stroke="#111111" stroke-width="2"/>
+<text x="165.0" y="673.0" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="24" font-weight="400" fill="#111111">VL53L1X 测距</text>
+<text x="165.0" y="707.0" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="21" font-weight="400" fill="#111111">独立测量快照</text>
+<rect x="365" y="195" width="395" height="600" rx="0" fill="white" stroke="#111111" stroke-width="2"/>
+<text x="562.5" y="221" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="26" font-weight="700" fill="#111111">算法与驱动层</text>
+<rect x="400" y="265" width="325" height="85" rx="0" fill="white" stroke="#111111" stroke-width="2"/>
+<text x="562.5" y="307.5" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="24" font-weight="400" fill="#111111">目标限幅与位置微调</text>
+<rect x="400" y="395" width="325" height="85" rx="0" fill="white" stroke="#111111" stroke-width="2"/>
+<text x="562.5" y="420.5" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="23" font-weight="400" fill="#111111">HX8 通信与反馈读取</text>
+<text x="562.5" y="454.5" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="21" font-weight="400" fill="#111111">USART2 / UC-01</text>
+<rect x="400" y="525" width="325" height="85" rx="0" fill="white" stroke="#111111" stroke-width="2"/>
+<text x="562.5" y="550.5" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="24" font-weight="400" fill="#111111">夹爪舵机驱动</text>
+<text x="562.5" y="584.5" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="21" font-weight="400" fill="#111111">TIM2 PWM</text>
+<rect x="400" y="655" width="325" height="85" rx="0" fill="white" stroke="#111111" stroke-width="2"/>
+<text x="562.5" y="680.5" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="24" font-weight="400" fill="#111111">测距传感器驱动</text>
+<text x="562.5" y="714.5" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="21" font-weight="400" fill="#111111">I²C / VL53L1X</text>
+<rect x="815" y="100" width="330" height="790" rx="0" fill="white" stroke="#111111" stroke-width="2"/>
+<text x="980.0" y="126" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="26" font-weight="700" fill="#111111">功能任务层</text>
+<rect x="850" y="170" width="260" height="80" rx="0" fill="white" stroke="#111111" stroke-width="2"/>
+<text x="980.0" y="210.0" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="24" font-weight="400" fill="#111111">遥控解析</text>
+<rect x="850" y="310" width="260" height="80" rx="0" fill="white" stroke="#111111" stroke-width="2"/>
+<text x="980.0" y="350.0" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="22" font-weight="400" fill="#111111">视觉目标接收与校验</text>
+<rect x="845" y="450" width="270" height="85" rx="0" fill="white" stroke="#111111" stroke-width="2"/>
+<text x="980.0" y="475.5" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="24" font-weight="400" fill="#111111">机械臂行为决策</text>
+<text x="980.0" y="509.5" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="21" font-weight="400" fill="#111111">主臂 / 夹爪状态机</text>
+<rect x="850" y="590" width="260" height="85" rx="0" fill="white" stroke="#111111" stroke-width="2"/>
+<text x="980.0" y="632.5" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="22" font-weight="400" fill="#111111">运动指令与反馈监督</text>
+<path d="M850,758.0 V837.0 A130.0,13.0 0 0 0 1110,837.0 V758.0" fill="white" stroke="#111111" stroke-width="2"/>
+<ellipse cx="980.0" cy="758.0" rx="130.0" ry="13.0" fill="white" stroke="#111111" stroke-width="2"/>
+<text x="980" y="790" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="25" font-weight="700" fill="#111111">DataHub</text>
+<text x="980" y="823" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="22" font-weight="400" fill="#111111">运行状态快照</text>
+<rect x="1200" y="245" width="410" height="505" rx="0" fill="white" stroke="#111111" stroke-width="2"/>
+<text x="1405.0" y="271" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="26" font-weight="700" fill="#111111">调度与安全层</text>
+<rect x="1235" y="315" width="340" height="90" rx="0" fill="white" stroke="#111111" stroke-width="2"/>
+<text x="1405.0" y="343.0" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="24" font-weight="400" fill="#111111">主控制任务</text>
+<text x="1405.0" y="377.0" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="21" font-weight="400" fill="#111111">ControlTask · 20 ms</text>
+<rect x="1235" y="465" width="340" height="90" rx="0" fill="white" stroke="#111111" stroke-width="2"/>
+<text x="1405.0" y="493.0" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="23" font-weight="400" fill="#111111">调试 / 测距 / 维护调度</text>
+<text x="1405.0" y="527.0" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="21" font-weight="400" fill="#111111">FreeRTOS 独立任务</text>
+<rect x="1235" y="615" width="340" height="90" rx="0" fill="white" stroke="#111111" stroke-width="2"/>
+<text x="1405.0" y="643.0" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="24" font-weight="400" fill="#111111">安全保护与故障恢复</text>
+<text x="1405.0" y="677.0" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="21" font-weight="400" fill="#111111">急停 / 失联 / 堵转 / 离线</text>
+<rect x="1665" y="260" width="350" height="475" rx="0" fill="white" stroke="#111111" stroke-width="2"/>
+<text x="1840.0" y="286" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="26" font-weight="700" fill="#111111">输入层</text>
+<rect x="1695" y="335" width="290" height="85" rx="0" fill="white" stroke="#111111" stroke-width="2"/>
+<text x="1840.0" y="360.5" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="24" font-weight="400" fill="#111111">遥控器输入</text>
+<text x="1840.0" y="394.5" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="21" font-weight="400" fill="#111111">ELRS / CRSF</text>
+<rect x="1695" y="475" width="290" height="85" rx="0" fill="white" stroke="#111111" stroke-width="2"/>
+<text x="1840.0" y="500.5" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="24" font-weight="400" fill="#111111">视觉目标输入</text>
+<text x="1840.0" y="534.5" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="21" font-weight="400" fill="#111111">电脑识别 → HC13</text>
+<rect x="1695" y="615" width="290" height="85" rx="0" fill="white" stroke="#111111" stroke-width="2"/>
+<text x="1840.0" y="640.5" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="24" font-weight="400" fill="#111111">调试请求输入</text>
+<text x="1840.0" y="674.5" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="21" font-weight="400" fill="#111111">SWD / RTT</text>
+<text x="1020" y="938" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="23" font-weight="400" fill="#333333">功能任务层为 ControlTask 顺序调用的步骤；视觉识别在电脑端运行，DataHub 用于状态观测。</text>
+</svg>

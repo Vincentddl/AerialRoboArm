@@ -1,0 +1,57 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="2040" height="1470" viewBox="0 0 2040 1470">
+<rect width="100%" height="100%" fill="white"/>
+<text x="1020" y="62" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="46" font-weight="700" fill="#203044">机械臂控制系统软件分层架构</text>
+<text x="1020" y="119" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="27" font-weight="400" fill="#596979">正式 FreeRTOS 构建 · 任务编排与顺序控制函数分开表达</text>
+<rect x="70" y="190" width="1510" height="145" rx="10" fill="#ffffff" stroke="#315680" stroke-width="2"/>
+<text x="180" y="262.5" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="33" font-weight="700" fill="#315680">APP</text>
+<rect x="295" y="205" width="1265" height="115" rx="10" fill="#f4f7fb" stroke="#315680" stroke-width="2"/>
+<text x="927.5" y="224.5" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="28" font-weight="700" fill="#315680">应用任务与调度</text>
+<text x="927.5" y="262.5" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="24" font-weight="400" fill="#203044">ControlTask 20 ms  ·  DebugTask 100 ms</text>
+<text x="927.5" y="300.5" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="24" font-weight="400" fill="#203044">TofTask 独立采样  ·  defaultTask 维护与条件喂狗</text>
+<rect x="70" y="395" width="1510" height="160" rx="10" fill="#ffffff" stroke="#315680" stroke-width="2"/>
+<text x="180" y="475.0" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="33" font-weight="700" fill="#315680">TASK</text>
+<rect x="295" y="410" width="1265" height="130" rx="10" fill="#f4f7fb" stroke="#315680" stroke-width="2"/>
+<text x="927.5" y="437.0" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="28" font-weight="700" fill="#315680">控制步骤与状态机</text>
+<text x="927.5" y="475.0" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="24" font-weight="400" fill="#203044">TaskRc → TaskVision → TaskArbiter → TaskManipulator → TaskMotion</text>
+<text x="927.5" y="513.0" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="24" font-weight="400" fill="#203044">以上为 ControlTask 顺序调用的功能步骤，并非五个独立线程</text>
+<rect x="70" y="615" width="1510" height="145" rx="10" fill="#ffffff" stroke="#315680" stroke-width="2"/>
+<text x="180" y="687.5" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="33" font-weight="700" fill="#315680">MOD</text>
+<rect x="295" y="630" width="1265" height="115" rx="10" fill="#f4f7fb" stroke="#315680" stroke-width="2"/>
+<text x="927.5" y="649.5" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="28" font-weight="700" fill="#315680">控制支撑模块</text>
+<text x="927.5" y="687.5" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="24" font-weight="400" fill="#203044">mod_rc_semantic  ·  mod_startup_angle  ·  mod_home_zero</text>
+<text x="927.5" y="725.5" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="24" font-weight="400" fill="#203044">mod_position_trim  ·  调试请求处理</text>
+<rect x="70" y="820" width="1510" height="145" rx="10" fill="#ffffff" stroke="#315680" stroke-width="2"/>
+<text x="180" y="892.5" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="33" font-weight="700" fill="#315680">DRV</text>
+<rect x="295" y="835" width="1265" height="115" rx="10" fill="#f4f7fb" stroke="#315680" stroke-width="2"/>
+<text x="927.5" y="854.5" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="28" font-weight="700" fill="#315680">设备驱动与通信协议</text>
+<text x="927.5" y="892.5" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="24" font-weight="400" fill="#203044">drv_elrs  ·  drv_hc13  ·  drv_fsus  ·  drv_servo</text>
+<text x="927.5" y="930.5" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="24" font-weight="400" fill="#203044">drv_vl53l1x / VL53L1X_api  ·  dev_status</text>
+<rect x="70" y="1025" width="1510" height="120" rx="10" fill="#ffffff" stroke="#315680" stroke-width="2"/>
+<text x="180" y="1085.0" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="33" font-weight="700" fill="#315680">BSP</text>
+<rect x="295" y="1040" width="1265" height="90" rx="10" fill="#f4f7fb" stroke="#315680" stroke-width="2"/>
+<text x="927.5" y="1066.0" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="28" font-weight="700" fill="#315680">板级外设抽象</text>
+<text x="927.5" y="1104.0" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="24" font-weight="400" fill="#203044">bsp_uart  ·  bsp_pwm  ·  bsp_i2c  ·  bsp_gpio</text>
+<polyline points="830,335 830,395" fill="none" stroke="#315680" stroke-width="3"/><polygon points="830,395 823.9104825224427,382.39374056706254 836.0895174775573,382.39374056706254" fill="#315680"/>
+<polyline points="830,555 830,615" fill="none" stroke="#315680" stroke-width="3"/><polygon points="830,615 823.9104825224427,602.3937405670625 836.0895174775573,602.3937405670625" fill="#315680"/>
+<polyline points="830,760 830,820" fill="none" stroke="#315680" stroke-width="3"/><polygon points="830,820 823.9104825224427,807.3937405670625 836.0895174775573,807.3937405670625" fill="#315680"/>
+<polyline points="830,965 830,1025" fill="none" stroke="#315680" stroke-width="3"/><polygon points="830,1025 823.9104825224427,1012.3937405670625 836.0895174775573,1012.3937405670625" fill="#315680"/>
+<rect x="70" y="1210" width="1510" height="110" rx="10" fill="#f4f7fb" stroke="#315680" stroke-width="2"/>
+<text x="825.0" y="1246.0" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="29" font-weight="700" fill="#315680">运行基础</text>
+<text x="825.0" y="1284.0" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="25" font-weight="400" fill="#203044">STM32 HAL / CMSIS  ·  FreeRTOS  ·  UART / DMA / I²C / TIM / IWDG / SWD</text>
+<polyline points="830,1145 830,1210" fill="none" stroke="#315680" stroke-width="3"/><polygon points="830,1210 823.9104825224427,1197.3937405670624 836.0895174775573,1197.3937405670624" fill="#315680"/>
+<rect x="1650" y="395" width="320" height="340" rx="10" fill="#f4f7fb" stroke="#315680" stroke-width="2"/>
+<text x="1810.0" y="489.0" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="31" font-weight="700" fill="#315680">DataHub</text>
+<text x="1810.0" y="527.0" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="23" font-weight="400" fill="#203044">ControlTask 单写者</text>
+<text x="1810.0" y="565.0" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="23" font-weight="400" fill="#203044">多读者状态快照</text>
+<text x="1810.0" y="603.0" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="23" font-weight="400" fill="#203044">模式 / 目标 / 反馈</text>
+<text x="1810.0" y="641.0" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="23" font-weight="400" fill="#203044">不承担实时控制链传递</text>
+<polyline points="1580,470 1650,470" fill="none" stroke="#287969" stroke-width="3" stroke-dasharray="10 7"/><polygon points="1650,470 1637.3937405670624,476.08951747755725 1637.3937405670624,463.91048252244275" fill="#287969"/>
+<text x="1775" y="779" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="23" font-weight="400" fill="#287969">调试与观测读取快照</text>
+<rect x="1650" y="855" width="320" height="190" rx="10" fill="#f0f8f5" stroke="#287969" stroke-width="2"/>
+<text x="1810.0" y="893.0" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="28" font-weight="700" fill="#287969">测距独立快照</text>
+<text x="1810.0" y="931.0" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="23" font-weight="400" fill="#203044">AppTofSnapshot</text>
+<text x="1810.0" y="969.0" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="23" font-weight="400" fill="#203044">独立于 DataHub</text>
+<text x="1810.0" y="1007.0" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="23" font-weight="400" fill="#203044">当前不直接驱动夹爪</text>
+<text x="1020" y="1390" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="25" font-weight="400" fill="#596979">已移除旧图中的 alg_pid / alg_voltage_foc / drv_as5600 / drv_bldc_power；主臂闭环由 HX8 内部完成。</text>
+<text x="1020" y="1435" text-anchor="middle" dominant-baseline="central" font-family="Microsoft YaHei, sans-serif" font-size="24" font-weight="400" fill="#596979">JY61P 与 HC13 V2 实验采集路径单独构建，不并入本图的正式任务结构。</text>
+</svg>

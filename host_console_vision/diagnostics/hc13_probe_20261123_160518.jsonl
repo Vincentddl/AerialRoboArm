@@ -1,0 +1,7 @@
+{"wall_utc": "2026-11-23T08:05:18.621+00:00", "monotonic_s": 689861.187, "kind": "start", "port": "COM3", "baud": 230400, "config": "8N1/no-flow/DTR=off/RTS=off", "safe_commands": ["GET INFO", "GET CAL", "GET STATE", "PING"], "ports": [{"port": "COM3", "description": "USB-SERIAL CH340 (COM3)", "hwid": "USB VID:PID=1A86:7523 SER= LOCATION=1-2"}]}
+{"wall_utc": "2026-11-23T08:05:18.622+00:00", "monotonic_s": 689861.203, "kind": "opened"}
+{"wall_utc": "2026-11-23T08:05:19.240+00:00", "monotonic_s": 689861.812, "kind": "TX", "req_id": 203454636, "command": "GET INFO", "hex": "47 45 54 2C 32 30 33 34 35 34 36 33 36 2C 49 4E 46 4F 0A", "ascii": "b'GET,203454636,INFO\\n'", "written": 19}
+{"wall_utc": "2026-11-23T08:05:19.614+00:00", "monotonic_s": 689862.187, "kind": "TX", "req_id": 203454637, "command": "GET CAL", "hex": "47 45 54 2C 32 30 33 34 35 34 36 33 37 2C 43 41 4C 0A", "ascii": "b'GET,203454637,CAL\\n'", "written": 18}
+{"wall_utc": "2026-11-23T08:05:19.984+00:00", "monotonic_s": 689862.562, "kind": "TX", "req_id": 203454638, "command": "GET STATE", "hex": "47 45 54 2C 32 30 33 34 35 34 36 33 38 2C 53 54 41 54 45 0A", "ascii": "b'GET,203454638,STATE\\n'", "written": 20}
+{"wall_utc": "2026-11-23T08:05:20.358+00:00", "monotonic_s": 689862.937, "kind": "TX", "req_id": 203454639, "command": "PING", "hex": "50 49 4E 47 2C 32 30 33 34 35 34 36 33 39 0A", "ascii": "b'PING,203454639\\n'", "written": 15}
+{"wall_utc": "2026-11-23T08:05:21.232+00:00", "monotonic_s": 689863.812, "kind": "end", "rx_bytes": 0, "parsed_frames": []}

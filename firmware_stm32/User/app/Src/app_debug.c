@@ -1,0 +1,747 @@
+﻿/**
+ * @file app_debug.c
+ * @brief L5 DebugTask: Console input, DataHub status dump, LED render.
+ *
+ * Processes RTT console requests, reports DataHub state and renders status IO.
+ */
+
+#include "app_debug.h"
+#include "app_control.h"
+#include "datahub.h"
+#include "debug_request.h"
+#include "bsp_uart.h"
+#include "SEGGER_RTT.h"
+#include "dev_status.h"
+#include "drv_hc13.h"
+#include "app_tof.h"
+#include "task_tof_gate.h"
+#include "task_motion.h"   /* TASK_MOTION_ANGLE_MIN_DEG / MAX_DEG */
+#include "task_rc.h"       /* TaskRc_CopyRawChannels */
+#include "task_arbiter.h"  /* ARB_REASON_* enum for human-readable [DBG] */
+#include "task_manipulator.h"
+#include "bsp_i2c.h"       /* Direct read-only TOFSense-F2 P link probe. */
+#include "tim.h"
+
+#include "FreeRTOS.h"
+#include "task.h"
+#include "cmsis_os2.h"
+
+#include <string.h>
+
+static osThreadId_t s_debug_handle = NULL;
+
+static const char *range_sensor_to_str(AppRangeSensorKind_t kind)
+{
+    switch (kind) {
+    case APP_RANGE_SENSOR_VL53L1X: return "VL53L1X";
+    default:                       return "unknown";
+    }
+}
+
+/* =============================================================================
+ * Console input
+ * ============================================================================= */
+
+/* Force-mode bring-up state mirrored locally so we can apply ±/preset keys
+ * without round-tripping through DataHub. Authoritative copy lives in
+ * app_control via DBG_REQ_FORCE_GOTO_ANGLE; this is just an echo for the
+ * input UI. */
+static int16_t s_console_force_angle = 0;
+
+/* Multi-char line buffer used by the 'g <angle>' command. The buffer
+ * is only read/written from DebugTask, so no locking is needed. */
+#define CONSOLE_LINE_MAX  16
+static char     s_line_buf[CONSOLE_LINE_MAX];
+static uint8_t  s_line_len = 0;
+static bool     s_line_active = false;   /* true after the user presses 'g' */
+
+static bool s_raw_dump_active = false;
+static bool s_verbose_dump_active = false;
+
+static void console_print_help(void)
+{
+    BSP_UART_Printf(
+        "[DBG] keys:\r\n"
+        "  v=mock-vision 120deg/3s   c=clear-vision    f=clear-fault\r\n"
+        "  e=force ON (hold current angle)    k=force OFF\r\n"
+        "  1=goto 0  2=goto -70  3=goto +70\r\n"
+        "  +=+10deg  -=-10deg\r\n"
+        "  g <deg>=force HX8 to arbitrary angle, eg 'g 47<enter>'\r\n"
+        "  z=toggle settled position trim (for baseline comparison)\r\n"
+        "  p <ch> <deg>=lock PTK (ch 0=grip,1=roll; deg 0..180; -1=release)\r\n"
+        "  p <deg>=SERVO1 angle while s debug is active, eg p 120\r\n"
+        "  P=release both PTK channels back to RC\r\n"
+        "  r=raw channel dump on/off\r\n"
+        "  d=toggle compact / detailed telemetry (default compact)\r\n"
+        "  s=toggle SERVO1-only debug; 4=90deg 5=130deg while debugging\r\n"
+        "  h=VOFA manual (no ELRS); home first, then g <angle> / p <angle>\r\n"
+        "  x=stop HX8 in VOFA manual; f=reset stop/fault\r\n"
+        "  i=probe TOFSense-F2 P I2C at default address 0x08\r\n"
+        "  t=show latest gripper distance sample\r\n"
+        "  ?=this help\r\n");
+}
+
+static uint16_t read_le16(const uint8_t *data)
+{
+    return (uint16_t)data[0] | ((uint16_t)data[1] << 8U);
+}
+
+static uint32_t read_le32(const uint8_t *data)
+{
+    return (uint32_t)data[0]
+         | ((uint32_t)data[1] << 8U)
+         | ((uint32_t)data[2] << 16U)
+         | ((uint32_t)data[3] << 24U);
+}
+
+/**
+ * Read-only TOFSense-F2 P communication check.
+ *
+ * The module's default I2C address is 0x08 (ID 0). Measurement registers
+ * 0x20..0x2F form one coherent 16-byte little-endian sample. This command
+ * deliberately performs no writes, so it cannot change the module mode, ID,
+ * refresh rate or filter settings.
+ */
+static void console_probe_tofsense_f2p(void)
+{
+    enum {
+        F2P_ADDRESS_7BIT = 0x08U,
+        F2P_DATA_REGISTER = 0x20U,
+        F2P_DATA_LENGTH = 16U,
+        F2P_TIMEOUT_MS = 20U,
+    };
+    uint8_t data[F2P_DATA_LENGTH];
+
+    AraStatus_t status = BSP_I2C_IsReady(F2P_ADDRESS_7BIT, F2P_TIMEOUT_MS);
+    if (status != ARA_OK) {
+        BSP_UART_Printf("[F2P] NACK addr=0x08 status=%d; check 5V/GND, mode and module ID\r\n",
+                        (int)status);
+        return;
+    }
+
+    status = BSP_I2C_ReadReg(F2P_ADDRESS_7BIT,
+                             F2P_DATA_REGISTER,
+                             data,
+                             F2P_DATA_LENGTH,
+                             F2P_TIMEOUT_MS);
+    if (status != ARA_OK) {
+        BSP_UART_Printf("[F2P] ACK addr=0x08 but register read failed status=%d\r\n",
+                        (int)status);
+        return;
+    }
+
+    const uint32_t sensor_time_ms = read_le32(&data[0]);
+    const int32_t distance_mm = (int32_t)read_le32(&data[4]);
+    const uint16_t range_status = read_le16(&data[8]);
+    const uint16_t signal_strength = read_le16(&data[10]);
+    const uint8_t precision_cm = data[12];
+    const uint16_t refresh_rate_hz = read_le16(&data[13]);
+    const uint8_t filter_factor = data[15];
+
+    BSP_UART_Printf("[F2P] OK addr=0x08 time=%lu ms distance=%ld mm valid=%u signal=%u precision=%u cm rate=%u Hz filter=%u\r\n",
+                    (unsigned long)sensor_time_ms,
+                    (long)distance_mm,
+                    (unsigned)(range_status == 1U),
+                    (unsigned)signal_strength,
+                    (unsigned)precision_cm,
+                    (unsigned)refresh_rate_hz,
+                    (unsigned)filter_factor);
+}
+
+static void console_read_tof(void)
+{
+    AppTofSnapshot_t snapshot;
+    if (!App_Tof_GetSnapshot(&snapshot)) {
+        BSP_UART_Printf("[TOF] snapshot unavailable\r\n");
+        return;
+    }
+
+    BSP_UART_Printf("[RANGE] %s online=%u id=0x%04X status=%d "
+                    "distance=%u mm valid=%u in_window=%u "
+                    "hits=%u/%u grasp_confirmed=%u range_status=%u "
+                    "signal=%u ambient=%u period=%lu ms samples=%lu errors=%lu tick=%lu\r\n",
+                    range_sensor_to_str(snapshot.sensor_kind),
+                    snapshot.online ? 1U : 0U,
+                    (unsigned)snapshot.sensor_id,
+                    (int)snapshot.last_status,
+                    (unsigned)snapshot.distance_mm,
+                    snapshot.measurement_valid ? 1U : 0U,
+                    snapshot.in_window ? 1U : 0U,
+                    (unsigned)snapshot.consecutive_hits,
+                    (unsigned)TASK_TOF_GATE_REQUIRED_SAMPLES,
+                    snapshot.grasp_confirmed ? 1U : 0U,
+                    (unsigned)snapshot.range_status,
+                    (unsigned)snapshot.signal_rate_kcps,
+                    (unsigned)snapshot.ambient_rate_kcps,
+                    (unsigned long)snapshot.measured_period_ms,
+                    (unsigned long)snapshot.sample_count,
+                    (unsigned long)snapshot.error_count,
+                    (unsigned long)snapshot.sample_timestamp_ms);
+}
+
+static void console_send_force(int16_t angle_deg, bool enable)
+{
+#if APP_CONTROL_SERVO1_ONLY
+    (void)angle_deg; (void)enable;
+    BSP_UART_Printf("[SERVO1_ONLY] HX8 commands disabled; use p 0 <angle>\r\n");
+    return;
+#endif
+    s_console_force_angle = angle_deg;
+    DebugRequest_Post(DBG_REQ_FORCE_GOTO_ANGLE,
+                      (int32_t)angle_deg,
+                      enable ? 0 : -1);
+    if (enable) {
+        BSP_UART_Printf("[DBG] force ON, tgt=%d deg\r\n", (int)angle_deg);
+    } else {
+        BSP_UART_Printf("[DBG] force OFF\r\n");
+    }
+}
+
+static int parse_signed_int(const char *s, uint8_t len, int32_t *out)
+{
+    if ((s == NULL) || (len == 0U)) return -1;
+    uint8_t  i   = 0U;
+    int32_t  acc = 0;
+    int32_t  sign = 1;
+    if (s[0] == '-') { sign = -1; i = 1U; }
+    else if (s[0] == '+') { i = 1U; }
+    if (i >= len) return -1;
+    for (; i < len; i++) {
+        if (s[i] < '0' || s[i] > '9') return -1;
+        acc = acc * 10 + (s[i] - '0');
+        if (acc > 100000) return -1;   /* overflow guard */
+    }
+    *out = sign * acc;
+    return 0;
+}
+
+static void console_finish_line(void)
+{
+    /* Two recognised line commands:
+     *   g <angle>          → HX8 force-goto
+     *   p <ch> <deg|-1>    → PTK end-effector force (ch: 0=PA0 grip, 1=PA1 roll;
+     *                        deg 0..180 lock, -1 release)
+     */
+    if (s_line_len < 2U) {
+        BSP_UART_Printf("[DBG] bad cmd\r\n");
+        s_line_len    = 0U;
+        s_line_active = false;
+        return;
+    }
+
+    if (s_line_buf[0] == 'g') {
+        uint8_t i = 1U;
+        while ((i < s_line_len) && (s_line_buf[i] == ' ')) i++;
+        int32_t deg;
+        if ((i >= s_line_len) ||
+            (parse_signed_int(&s_line_buf[i], (uint8_t)(s_line_len - i), &deg) != 0)) {
+            BSP_UART_Printf("[DBG] bad angle, try 'g 47'\r\n");
+        } else {
+            if (deg < TASK_MOTION_ANGLE_MIN_DEG) deg = TASK_MOTION_ANGLE_MIN_DEG;
+            if (deg > TASK_MOTION_ANGLE_MAX_DEG) deg = TASK_MOTION_ANGLE_MAX_DEG;
+            console_send_force((int16_t)deg, true);
+        }
+    } else if (s_line_buf[0] == 'p') {
+        uint8_t i = 1U;
+        while (s_line_len > 1U && s_line_buf[s_line_len - 1U] == ' ') s_line_len--;
+        while ((i < s_line_len) && (s_line_buf[i] == ' ')) i++;
+        int32_t short_deg;
+        if (i < s_line_len && parse_signed_int(&s_line_buf[i], (uint8_t)(s_line_len - i), &short_deg) == 0) {
+            if (!App_Control_IsServo1Debug() && !App_Control_IsVofaManual()) {
+                BSP_UART_Printf("[SERVO1] send s first, then p <angle>; normal mode uses p 0 <angle>\r\n");
+            } else if (short_deg < -1 || short_deg > 180) {
+                BSP_UART_Printf("[SERVO1] angle must be 0..180 or -1\r\n");
+            } else {
+                DebugRequest_Post(DBG_REQ_FORCE_PTK_ANGLE, 0, short_deg);
+                BSP_UART_Printf("[SERVO1] requested angle=%ld\r\n", (long)short_deg);
+            }
+        } else if (i >= s_line_len || (s_line_buf[i] != '0' && s_line_buf[i] != '1')) {
+            BSP_UART_Printf("[DBG] bad ch, try 'p 0 90' (0=grip,1=roll)\r\n");
+        } else {
+            int32_t ch = s_line_buf[i] - '0';
+            i++;
+            while ((i < s_line_len) && (s_line_buf[i] == ' ')) i++;
+            int32_t deg;
+            if ((i >= s_line_len) ||
+                (parse_signed_int(&s_line_buf[i], (uint8_t)(s_line_len - i), &deg) != 0)) {
+                BSP_UART_Printf("[DBG] bad deg, try 'p 0 90' or 'p 1 -1'\r\n");
+            } else {
+                DebugRequest_Post(DBG_REQ_FORCE_PTK_ANGLE, ch, deg);
+                if (deg < 0) {
+                    BSP_UART_Printf("[DBG] PTK ch=%ld released to RC\r\n", (long)ch);
+                } else {
+                    BSP_UART_Printf("[DBG] PTK ch=%ld locked to %ld deg\r\n",
+                                    (long)ch, (long)deg);
+                }
+            }
+        }
+    } else {
+        BSP_UART_Printf("[DBG] bad cmd, try 'g <angle>' or 'p <ch> <deg>'\r\n");
+    }
+
+    s_line_len    = 0U;
+    s_line_active = false;
+}
+
+static void console_handle_line_char(char c)
+{
+    if ((c == '\r') || (c == '\n')) {
+        console_finish_line();
+        return;
+    }
+    if ((c == 0x08) || (c == 0x7F)) {  /* backspace / DEL */
+        if (s_line_len > 0U) {
+            s_line_len--;
+            BSP_UART_Printf("\b \b");
+        }
+        return;
+    }
+    if (s_line_len < (CONSOLE_LINE_MAX - 1U)) {
+        s_line_buf[s_line_len++] = c;
+        /* Echo so the operator can see what they typed. */
+        char echo[2] = { c, 0 };
+        BSP_UART_Printf("%s", echo);
+    }
+}
+
+static void console_poll(uint32_t tick_ms)
+{
+    uint8_t buf[16];
+    unsigned n = SEGGER_RTT_Read(0, buf, sizeof(buf));
+    for (uint16_t i = 0; i < n; i++) {
+        char c = (char)buf[i];
+
+        if (s_line_active) {
+            console_handle_line_char(c);
+            continue;
+        }
+
+        switch (c) {
+        case 'v':
+            DebugRequest_Post(DBG_REQ_MOCK_VISION_TARGET, 120, 3000);
+            BSP_UART_Printf("[DBG] mock vision target 120 deg / 3s\r\n");
+            break;
+        case 'c':
+            DebugRequest_Post(DBG_REQ_MOCK_VISION_CLEAR, 0, 0);
+            BSP_UART_Printf("[DBG] mock vision cleared\r\n");
+            break;
+        case 'f':
+            DebugRequest_Post(DBG_REQ_CLEAR_FAULT, 0, 0);
+            BSP_UART_Printf("[DBG] clear fault requested\r\n");
+            break;
+        case 'e': {
+            /* Lock force mode at the servo's current physical position so
+             * enabling force does NOT command an unwanted slew back to 0
+             * deg. After 'e' the servo holds where it already is, then the
+             * operator can step from there with +/-/1/2/3/g. */
+            DataHub_t hub;
+            DataHub_Read(&hub);
+            int32_t raw = hub.servo_position_angle_deg;
+            int32_t cur = (raw >= 0) ? (raw + 5) / 10 : (raw - 5) / 10;
+            if (cur < TASK_MOTION_ANGLE_MIN_DEG) cur = TASK_MOTION_ANGLE_MIN_DEG;
+            if (cur > TASK_MOTION_ANGLE_MAX_DEG) cur = TASK_MOTION_ANGLE_MAX_DEG;
+            console_send_force((int16_t)cur, true);
+            break;
+        }
+        case 'k':
+            console_send_force(s_console_force_angle, false);
+            break;
+        case 'z': {
+            bool enabled = !TaskMotion_IsPositionTrimEnabled();
+            TaskMotion_SetPositionTrimEnabled(enabled);
+            BSP_UART_Printf("[DBG] position trim %s\r\n", enabled ? "ON" : "OFF");
+            break;
+        }
+        case 's':
+            DebugRequest_Post(DBG_REQ_TOGGLE_SERVO1_DEBUG, 0, 0);
+            break;
+        case 'h':
+            DebugRequest_Post(DBG_REQ_SELECT_HX8_DEBUG, 0, 0);
+            break;
+        case 'x':
+            if (App_Control_IsVofaManual()) DebugRequest_Post(DBG_REQ_FORCE_GOTO_ANGLE, 0, -1);
+            else BSP_UART_Printf("[VOFA] select h for VOFA manual first\r\n");
+            break;
+        case '4':
+        case '5':
+            if (App_Control_IsServo1Debug()) {
+                DebugRequest_Post(DBG_REQ_FORCE_PTK_ANGLE, 0, c == '4' ? 90 : 130);
+            } else {
+                BSP_UART_Printf("[SERVO1] send s first to enable isolated debug\r\n");
+            }
+            break;
+        case '1':
+            console_send_force(0, true);
+            break;
+        case '2':
+            console_send_force(-70, true);
+            break;
+        case '3':
+            console_send_force(70, true);
+            break;
+        case '+': {
+            int32_t a = (int32_t)s_console_force_angle + 10;
+            if (a > TASK_MOTION_ANGLE_MAX_DEG) a = TASK_MOTION_ANGLE_MAX_DEG;
+            console_send_force((int16_t)a, true);
+            break;
+        }
+        case '-': {
+            int32_t a = (int32_t)s_console_force_angle - 10;
+            if (a < TASK_MOTION_ANGLE_MIN_DEG) a = TASK_MOTION_ANGLE_MIN_DEG;
+            console_send_force((int16_t)a, true);
+            break;
+        }
+        case 'g':
+            s_line_active = true;
+            s_line_len    = 0U;
+            s_line_buf[s_line_len++] = 'g';
+            BSP_UART_Printf("g");
+            break;
+        case 'p':
+            s_line_active = true;
+            s_line_len    = 0U;
+            s_line_buf[s_line_len++] = 'p';
+            BSP_UART_Printf("p");
+            break;
+        case 'P':
+            DebugRequest_Post(DBG_REQ_FORCE_PTK_ANGLE, 0, -1);
+            DebugRequest_Post(DBG_REQ_FORCE_PTK_ANGLE, 1, -1);
+            BSP_UART_Printf("[DBG] PTK released (both ch back to RC)\r\n");
+            break;
+        case 'd':
+            s_verbose_dump_active = !s_verbose_dump_active;
+            BSP_UART_Printf("[LOG] %s\r\n", s_verbose_dump_active ? "detailed" : "compact");
+            break;
+        case 'r':
+            s_raw_dump_active = !s_raw_dump_active;
+            BSP_UART_Printf("[DBG] raw channel dump %s\r\n",
+                            s_raw_dump_active ? "ON (1 Hz)" : "OFF");
+            break;
+        case 'i':
+            console_probe_tofsense_f2p();
+            break;
+        case 't':
+            console_read_tof();
+            break;
+        case '?':
+            console_print_help();
+            break;
+        default:
+            break;
+        }
+    }
+    (void)tick_ms;
+}
+
+/* =============================================================================
+ * LED render from DataHub pattern
+ * ============================================================================= */
+
+static void led_render(uint32_t tick_ms)
+{
+    AraLedPattern_t p = DataHub_GetLedPattern();
+    bool on = false;
+    switch (p) {
+    case LED_PATTERN_OFF:               on = false; break;
+    case LED_PATTERN_BOOT_FAST_BLINK:   on = ((tick_ms / 100U) & 1U); break;
+    case LED_PATTERN_IDLE_SLOW_BLINK:   on = ((tick_ms / 500U) & 1U); break;
+    case LED_PATTERN_MANUAL_HEARTBEAT:  on = ((tick_ms % 1000U) < 80U); break;
+    case LED_PATTERN_AUTO_SOLID:        on = true; break;
+    case LED_PATTERN_ERROR_SOS:         on = ((tick_ms / 150U) & 1U); break;
+    default:                             on = false; break;
+    }
+    DevStatus_LedSet(on);
+}
+
+/* =============================================================================
+ * Periodic snapshot print
+ * ============================================================================= */
+
+static uint32_t s_snapshot_print_counter = 0U;
+
+/* Tracks last seen ELRS link state so we only print on edges (connect/disconnect).
+ * Init to -1 (neither 0 nor 1) so the first observed state always prints once. */
+static int8_t   s_last_rc_link_up = -1;
+
+static void raw_channel_dump(void)
+{
+    uint16_t ch[DRV_ELRS_MAX_CHANNELS];
+    AraStatus_t st = TaskRc_CopyRawChannels(ch, DRV_ELRS_MAX_CHANNELS);
+    if (st != ARA_OK) {
+        BSP_UART_Printf("[RC] link down, no data\r\n");
+        return;
+    }
+    BSP_UART_Printf("[RC] CH1=%5u CH4=%5u SA=%5u SE=%5u SC=%5u SF=%5u SB=%5u SD=%5u\r\n",
+                    (unsigned)ch[0],   /* CH1 main arm stick */
+                    (unsigned)ch[3],   /* CH4 gripper stick */
+                    (unsigned)ch[4],   /* CH5  SA mode */
+                    (unsigned)ch[5],   /* CH6  SE home switch */
+                    (unsigned)ch[6],   /* CH7  SC gripper switch */
+                    (unsigned)ch[7],   /* CH8  SF roll wheel */
+                    (unsigned)ch[8],   /* CH9  SB reset pulse */
+                    (unsigned)ch[9]);  /* CH10 SD e-stop */
+}
+
+static const char *mode_to_str(uint8_t m)
+{
+    switch (m) {
+    case ARA_MODE_INIT:   return "INIT  ";
+    case ARA_MODE_IDLE:   return "IDLE  ";
+    case ARA_MODE_MANUAL: return "MANUAL";
+    case ARA_MODE_AUTO:   return "AUTO  ";
+    case ARA_MODE_ERROR:  return "ERROR ";
+    default:              return "?     ";
+    }
+}
+
+static const char *reason_to_str(uint8_t r)
+{
+    switch (r) {
+    case ARB_REASON_BOOT:                return "BOOT       ";
+    case ARB_REASON_ESTOP_OPERATOR:      return "ESTOP_SD   ";
+    case ARB_REASON_ESTOP_RC_LOSS:       return "ESTOP_RCLOS";
+    case ARB_REASON_MANUAL_RC:           return "MANUAL_RC  ";
+    case ARB_REASON_AUTO_VISION_FRESH:   return "AUTO_FRESH ";
+    case ARB_REASON_AUTO_VISION_STALE:   return "AUTO_STALE ";
+    case ARB_REASON_IDLE_DEFAULT:        return "IDLE       ";
+    case ARB_REASON_SERVO_OFFLINE:       return "NO_SERVO   ";
+    case ARB_REASON_FAULT_PENDING_RESET: return "WAIT_RESET ";
+    case ARB_REASON_HOME_ZERO:           return "HOME_ZERO  ";
+    case ARB_REASON_SERVO_STALL:         return "SERVO_STALL";
+    case ARB_REASON_SERVO1_DEBUG:        return "DEBUG      ";
+    case ARB_REASON_MANUAL_VOFA:         return "MANUAL_VOFA";
+    default:                             return "?          ";
+    }
+}
+
+/* Keep the cause stable while FAULT/PING retries alternate ERROR and INIT. */
+static uint16_t feedback_faults(const DataHub_t *s)
+{
+    /* Zero is also the DataHub placeholder before any real monitor reply. */
+    if (s->servo_feedback_age_ms >= 140U || s->servo_voltage_mv == 0) return 0x100U;
+    uint16_t faults = s->servo_hw_status & 0xFEU;
+    if (s->servo_voltage_mv < 9000) faults |= 0x200U;
+    if (s->servo_voltage_mv > 12600) faults |= 0x400U;
+    return faults;
+}
+
+static const char *feedback_fault_name(uint16_t faults)
+{
+    if (faults & 0x100U) return "HX8_NO_FEEDBACK";
+    if (faults & (0x400U | 0x08U)) return "HX8_OVERVOLT";
+    if (faults & 0x200U) return "HX8_UNDERVOLT";
+    if (faults & 0x04U) return "HX8_STALL";
+    return faults ? "HX8_PROTECTION" : "OK";
+}
+
+static void log_status_changes(const DataHub_t *s)
+{
+    static int32_t last_faults = -1;
+    static int16_t last_home = -1;
+    uint16_t faults = feedback_faults(s);
+    if ((int8_t)s->rc_link_up != s_last_rc_link_up) {
+        s_last_rc_link_up = (int8_t)s->rc_link_up;
+        BSP_UART_Printf("[RC] ELRS %s\r\n", s->rc_link_up ? "connected" : "lost; waiting for transmitter");
+    }
+    if ((int32_t)faults != last_faults) {
+        last_faults = faults;
+        BSP_UART_Printf("[EVENT] %s voltage=%d mV status=0x%02X\r\n",
+                        feedback_fault_name(faults), (int)s->servo_voltage_mv,
+                        (unsigned)s->servo_hw_status);
+    }
+    if ((int16_t)s->home_zero_stage != last_home) {
+        static const char *const home_names[] = {"waiting", "moving", "done", "failed"};
+        last_home = s->home_zero_stage;
+        BSP_UART_Printf("[HOME] stage=%u %s target=0\r\n", (unsigned)s->home_zero_stage,
+                        s->home_zero_stage < 4U ? home_names[s->home_zero_stage] : "unknown");
+    }
+}
+
+static void periodic_snapshot(void)
+{
+    DataHub_t s;
+    DataHub_Read(&s);
+#if !APP_CONTROL_SERVO1_ONLY
+    /* Changes are observed at the debug task's 100 ms rate. */
+    if (!App_Control_IsServo1Debug()) log_status_changes(&s);
+#endif
+    s_snapshot_print_counter++;
+    if ((s_snapshot_print_counter % 10U) != 0U) {
+        return; /* print once per second */
+    }
+#if APP_CONTROL_SERVO1_ONLY
+    uint32_t timer_hz = HAL_RCC_GetPCLK1Freq();
+    if ((RCC->CFGR & RCC_CFGR_PPRE1) != 0U) timer_hz *= 2U;
+    uint32_t tick_hz = timer_hz / (TIM2->PSC + 1U);
+    uint32_t frequency = tick_hz / (TIM2->ARR + 1U);
+    uint32_t pulse_us = tick_hz ? TIM2->CCR1 * 1000000U / tick_hz : 0U;
+    BSP_UART_Printf("[DBG] SERVO1_ONLY rc=%u grip_tgt=%u roll=OFF hx8=OFF\r\n",
+                    s.rc_link_up ? 1U : 0U, (unsigned)s.end_gripper_deg);
+    BSP_UART_Printf("[SAFE] servo1_pwm=%u servo2_pwm=0 hx8_control=0\r\n",
+                    ((TIM2->CR1 & TIM_CR1_CEN) && (TIM2->CCER & TIM_CCER_CC1E)) ? 1U : 0U);
+    BSP_UART_Printf("[PWM] pin=PA0 pulse_us=%lu frequency_hz=%lu\r\n",
+                    (unsigned long)pulse_us, (unsigned long)frequency);
+    BSP_UART_Printf("[BUS] hx8_tx=%lu hx8_rx=%lu hc13_rx=%lu\r\n",
+                    (unsigned long)BSP_UART_Fsus_GetTxBytes(),
+                    (unsigned long)BSP_UART_Fsus_GetRxBytes(),
+                    (unsigned long)BSP_UART_HC13_GetRxBytes());
+    BSP_UART_Printf("[PWR] voltage=N/A current=N/A (HX8 disabled)\r\n");
+    BSP_UART_Printf("[POS] actual_angle=N/A (PWM servo has no feedback)\r\n");
+    return;
+#endif
+
+    if (App_Control_IsServo1Debug()) {
+        uint32_t timer_hz = HAL_RCC_GetPCLK1Freq();
+        if ((RCC->CFGR & RCC_CFGR_PPRE1) != 0U) timer_hz *= 2U;
+        uint32_t tick_hz = timer_hz / (TIM2->PSC + 1U);
+        BSP_UART_Printf("[SERVO1] angle_cmd=%u pulse_us=%lu pwm_hz=%lu hx8_control=OFF feedback=N/A\r\n",
+            (unsigned)s.end_gripper_deg,
+            (unsigned long)(tick_hz ? TIM2->CCR1 * 1000000U / tick_hz : 0U),
+            (unsigned long)(tick_hz / (TIM2->ARR + 1U)));
+        /* Preserve the normal compact/detailed status display below. */
+    }
+
+    int16_t force_angle = 0;
+    bool    force_on    = App_Control_GetForceState(&force_angle);
+
+    int32_t pos_raw = (int32_t)s.servo_position_angle_deg;
+    bool    pos_neg = (pos_raw < 0);
+    int32_t pos_abs = pos_neg ? -pos_raw : pos_raw;
+    int32_t pos_int = pos_abs / 10;
+    int32_t pos_frc = pos_abs % 10;
+
+    int32_t tgt_raw = force_on ? ((int32_t)force_angle * 10) : (int32_t)s.servo_target_angle_deg;
+    bool    tgt_neg = (tgt_raw < 0);
+    int32_t tgt_abs = tgt_neg ? -tgt_raw : tgt_raw;
+    int32_t tgt_int = tgt_abs / 10;
+    int32_t tgt_frc = tgt_abs % 10;
+
+    const uint16_t faults = feedback_faults(&s);
+    uint8_t debug_target = App_Control_GetDebugTarget();
+    const char *debug_name = debug_target == 1U ? "SERVO1" : debug_target == 2U ? "HX8" : "NONE";
+    const char *reason = reason_to_str(s.arbiter_reason_code);
+    if (s.arbiter_reason_code == ARB_REASON_SERVO_OFFLINE && !(faults & 0x100U)) {
+        reason = faults ? feedback_fault_name(faults) : "SERVO_WAIT ";
+    }
+    if (!s_verbose_dump_active) {
+        BSP_UART_Printf("[DBG] %s %s rc=%u vis=%u pos=%s%d.%d tgt=%s%d.%d grip=%u voltage=%d status=0x%02X fb_age=%lu stall=%u home=%u health=%s debug=%s%s\r\n",
+            mode_to_str((uint8_t)s.current_mode), reason,
+            s.rc_link_up ? 1U : 0U, s.vision_link_up ? 1U : 0U,
+            pos_neg ? "-" : "", (int)pos_int, (int)pos_frc,
+            tgt_neg ? "-" : "", (int)tgt_int, (int)tgt_frc,
+            (unsigned)s.end_gripper_deg, (int)s.servo_voltage_mv,
+            (unsigned)s.servo_hw_status, (unsigned long)s.servo_feedback_age_ms,
+            s.servo_stalled ? 1U : 0U, (unsigned)s.home_zero_stage,
+            App_Control_IsServo1Debug() ? "HX8_PAUSED" : feedback_fault_name(faults),
+            debug_name,
+            force_on ? " [FORCE]" : "");
+        if (s_raw_dump_active) raw_channel_dump();
+        return;
+    }
+
+    BSP_UART_Printf("[DBG] %s %s rc=%d vis=%d pos=%s%d.%d tgt=%s%d.%d load=%d roll=%3u grip=%3u wr=%u rd=%u tx=%lu rx=%lu erx=%lu hc13=%lu vf=%lu rec=%lu debug=%s%s\r\n",
+                    mode_to_str((uint8_t)s.current_mode),
+                    reason,
+                    (int)s.rc_link_up,
+                    (int)s.vision_link_up,
+                    pos_neg ? "-" : "", (int)pos_int, (int)pos_frc,
+                    tgt_neg ? "-" : "", (int)tgt_int, (int)tgt_frc,
+                    (int)s.servo_load,
+                    (unsigned)s.end_roll_deg,
+                    (unsigned)s.end_gripper_deg,
+                    (unsigned)s.servo_last_write_result,
+                    (unsigned)s.servo_last_read_result,
+                    (unsigned long)BSP_UART_Fsus_GetTxBytes(),
+                    (unsigned long)BSP_UART_Fsus_GetRxBytes(),
+                    (unsigned long)BSP_UART_Elrs_GetRxBytes(),
+                    (unsigned long)BSP_UART_HC13_GetRxBytes(),
+                    (unsigned long)DrvHC13_GetVisionFrames(),
+                    (unsigned long)BSP_UART_RxDma_GetRecoveries(),
+                    debug_name,
+                    force_on ? " [FORCE]" : "");
+
+    BSP_UART_Printf("[SAFE] ch1=%d fb_age=%lu ms reconnect_guard=%d stall=%d encoder_jumps=%lu\r\n",
+                    (int)s.rc_ch1_percent,
+                    (unsigned long)s.servo_feedback_age_ms,
+                    s.servo_reconnect_guard ? 1 : 0,
+                    s.servo_stalled ? 1 : 0,
+                    (unsigned long)s.servo_encoder_jump_count);
+
+    BSP_UART_Printf("[BUS] txe=%lu rxe=%lu rearm=%lu overflow=%lu hal=0x%lX\r\n",
+                    (unsigned long)BSP_UART_Fsus_GetTxErrors(),
+                    (unsigned long)BSP_UART_Fsus_GetRxErrors(),
+                    (unsigned long)BSP_UART_Fsus_GetRxRearmFailures(),
+                    (unsigned long)BSP_UART_Fsus_GetRxOverflows(),
+                    (unsigned long)BSP_UART_Fsus_GetLastHalError());
+
+    BSP_UART_Printf("[PWR] voltage=%d mV current=%d mA power=%d mW temp_adc=%d status=0x%02X\r\n",
+                    (int)s.servo_voltage_mv,
+                    (int)s.servo_load,
+                    (int)s.servo_power_mw,
+                    (int)s.servo_temp_raw,
+                    (unsigned)s.servo_hw_status);
+    BSP_UART_Printf("[POS] sent_ddeg=%d trim_ddeg=%d valid=%u cap=%u block=%u enabled=%u\r\n",
+                    (int)s.servo_bus_target_ddeg, (int)s.servo_position_trim_ddeg,
+                    s.servo_bus_target_valid ? 1U : 0U,
+                    s.servo_position_trim_limited ? 1U : 0U,
+                    s.servo_position_trim_blocked ? 1U : 0U,
+                    TaskMotion_IsPositionTrimEnabled() ? 1U : 0U);
+
+    if (s.current_mode == ARA_MODE_AUTO) {
+        BSP_UART_Printf("[PICK] stage=%u grip=%u stable=%u\r\n",
+                        (unsigned)s.auto_pick_stage, (unsigned)s.end_gripper_deg,
+                        (unsigned)s.auto_grip_stable_frames);
+    }
+    BSP_UART_Printf("[HOME] stage=%u target=0\r\n", (unsigned)s.home_zero_stage);
+
+    if (s_raw_dump_active) {
+        raw_channel_dump();
+    }
+}
+
+/* =============================================================================
+ * Task body
+ * ============================================================================= */
+
+static void DebugTaskEntry(void *arg)
+{
+    (void)arg;
+    TickType_t last_wake = xTaskGetTickCount();
+
+    BSP_UART_Printf("\r\n[DBG] ARA demo_v7 up. press '?' for help\r\n");
+#if APP_CONTROL_SERVO1_ONLY
+    BSP_UART_Printf("[FW] SERVO1_ONLY PA0 PWM; HX8 and SERVO2 disabled\r\n");
+#else
+    BSP_UART_Printf("[FW] explicit_home_zero_v2 default_g=%d\r\n",
+                    (int)ARA_MAIN_ARM_DEFAULT_ANGLE_DEG);
+    BSP_UART_Printf("[FW] auto_grip=%s\r\n",
+                    TASK_MANIP_AUTO_GRIP_THREE_FRAME ? "three_frames" : "manual_CH4");
+#endif
+
+    for (;;) {
+        const uint32_t now_ms = osKernelGetTickCount();
+        console_poll(now_ms);
+        periodic_snapshot();
+        led_render(now_ms);
+        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(ARA_PERIOD_DEBUG_MS));
+    }
+}
+
+/* =============================================================================
+ * Lifecycle
+ * ============================================================================= */
+
+void App_Debug_InitDeps(void)
+{
+    /* Nothing pre-scheduler for now. */
+}
+
+void App_Debug_Init(void)
+{
+    const osThreadAttr_t attr = {
+        .name       = "DebugTask",
+        .stack_size = ARA_STACK_DEBUG_BYTES,
+        .priority   = ARA_PRIO_DEBUG,
+    };
+    s_debug_handle = osThreadNew(DebugTaskEntry, NULL, &attr);
+}

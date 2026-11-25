@@ -1,0 +1,113 @@
+{
+  "type": "calibrated_position_lut",
+  "name": "rig_position_lut_yolo26n_seg_20261123",
+  "created_at": "2026-11-23T20:32:27+08:00",
+  "detector_model": "black_block_yolo26n_seg_rig_v1.pt",
+  "detector_anchor": "mask_centroid",
+  "frame_height": 480,
+  "frame_width": 640,
+  "arm_axis_center_x_px": 307.1,
+  "working_zero_mdeg": 90000,
+  "extension_sign": -1,
+  "monotonic": true,
+  "hold_detection_rate": 0.94227,
+  "validation": {
+    "empty_gripper_false_positives": "0/25",
+    "closeup_augmented_recall": "58/60",
+    "hold_frames_detected": "1469/1559"
+  },
+  "points": [
+    {
+      "guide_extension_deg": 30.0,
+      "extension_deg": 29.1,
+      "center_y_px": 369.182,
+      "hold_count": 2,
+      "sample_count": 183,
+      "hysteresis_y_px": 0.157,
+      "hysteresis_encoder_deg": 0.8
+    },
+    {
+      "guide_extension_deg": 35.0,
+      "extension_deg": 34.45,
+      "center_y_px": 338.776,
+      "hold_count": 2,
+      "sample_count": 157,
+      "hysteresis_y_px": 3.702,
+      "hysteresis_encoder_deg": 0.1
+    },
+    {
+      "guide_extension_deg": 40.0,
+      "extension_deg": 39.3,
+      "center_y_px": 313.295,
+      "hold_count": 2,
+      "sample_count": 184,
+      "hysteresis_y_px": 2.033,
+      "hysteresis_encoder_deg": 0.4
+    },
+    {
+      "guide_extension_deg": 45.0,
+      "extension_deg": 44.25,
+      "center_y_px": 285.59,
+      "hold_count": 2,
+      "sample_count": 121,
+      "hysteresis_y_px": 1.241,
+      "hysteresis_encoder_deg": 0.5
+    },
+    {
+      "guide_extension_deg": 50.0,
+      "extension_deg": 49.2,
+      "center_y_px": 258.283,
+      "hold_count": 2,
+      "sample_count": 183,
+      "hysteresis_y_px": 0.734,
+      "hysteresis_encoder_deg": 0.6
+    },
+    {
+      "guide_extension_deg": 55.0,
+      "extension_deg": 54.15,
+      "center_y_px": 231.356,
+      "hold_count": 2,
+      "sample_count": 183,
+      "hysteresis_y_px": 1.636,
+      "hysteresis_encoder_deg": 0.7
+    },
+    {
+      "guide_extension_deg": 60.0,
+      "extension_deg": 59.0,
+      "center_y_px": 206.43,
+      "hold_count": 2,
+      "sample_count": 183,
+      "hysteresis_y_px": 2.184,
+      "hysteresis_encoder_deg": 0.4
+    },
+    {
+      "guide_extension_deg": 65.0,
+      "extension_deg": 63.85,
+      "center_y_px": 181.858,
+      "hold_count": 2,
+      "sample_count": 183,
+      "hysteresis_y_px": 3.967,
+      "hysteresis_encoder_deg": 0.7
+    },
+    {
+      "guide_extension_deg": 70.0,
+      "extension_deg": 68.4,
+      "center_y_px": 156.866,
+      "hold_count": 1,
+      "sample_count": 92,
+      "hysteresis_y_px": null,
+      "hysteresis_encoder_deg": null
+    }
+  ],
+  "hysteresis_summary": {
+    "max_y_px": 3.967,
+    "mean_y_px": 1.957,
+    "max_encoder_deg": 0.8,
+    "mean_encoder_deg": 0.525
+  },
+  "source": {
+    "video": "runtime\\position_recordings\\sweep_20261123_200109\\sweep_20261123_200109.avi",
+    "events": "runtime\\position_recordings\\sweep_20261123_200109\\sweep_20261123_200109.angles.jsonl",
+    "total_holds": 17
+  }
+}

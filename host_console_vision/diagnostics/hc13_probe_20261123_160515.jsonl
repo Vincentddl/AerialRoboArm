@@ -1,0 +1,29 @@
+{"wall_utc": "2026-11-23T08:05:15.659+00:00", "monotonic_s": 689858.234, "kind": "start", "port": "COM3", "baud": 115200, "config": "8N1/no-flow/DTR=off/RTS=off", "safe_commands": ["GET INFO", "GET CAL", "GET STATE", "PING"], "ports": [{"port": "COM3", "description": "USB-SERIAL CH340 (COM3)", "hwid": "USB VID:PID=1A86:7523 SER= LOCATION=1-2"}]}
+{"wall_utc": "2026-11-23T08:05:15.661+00:00", "monotonic_s": 689858.234, "kind": "opened"}
+{"wall_utc": "2026-11-23T08:05:16.285+00:00", "monotonic_s": 689858.859, "kind": "TX", "req_id": 439689268, "command": "GET INFO", "hex": "47 45 54 2C 34 33 39 36 38 39 32 36 38 2C 49 4E 46 4F 0A", "ascii": "b'GET,439689268,INFO\\n'", "written": 19}
+{"wall_utc": "2026-11-23T08:05:16.302+00:00", "monotonic_s": 689858.875, "kind": "RX", "hex": "49", "ascii": "b'I'", "parsed": []}
+{"wall_utc": "2026-11-23T08:05:16.302+00:00", "monotonic_s": 689858.875, "kind": "RX", "hex": "4E 46 4F 2C 34 33 39 36 38 39 32 36 38 2C 32 2C 32 33 36 32 39 34 34 33 36 30 2C 38 34 31 33", "ascii": "b'NFO,439689268,2,2362944360,8413'", "parsed": []}
+{"wall_utc": "2026-11-23T08:05:16.305+00:00", "monotonic_s": 689858.875, "kind": "RX", "hex": "38", "ascii": "b'8'", "parsed": []}
+{"wall_utc": "2026-11-23T08:05:16.305+00:00", "monotonic_s": 689858.875, "kind": "RX", "hex": "34 38 38 34 2C 31 31 35 32 30 30 2C 32 30 30 2C 32 30 2C 35 30 30 2C 31 30 30 2C 31 30 30 30", "ascii": "b'4884,115200,200,20,500,100,1000'", "parsed": []}
+{"wall_utc": "2026-11-23T08:05:16.307+00:00", "monotonic_s": 689858.875, "kind": "RX", "hex": "2C", "ascii": "b','", "parsed": []}
+{"wall_utc": "2026-11-23T08:05:16.307+00:00", "monotonic_s": 689858.875, "kind": "RX", "hex": "36 30 2C 35 30 30 0A", "ascii": "b'60,500\\n'", "parsed": ["InfoFrame"]}
+{"wall_utc": "2026-11-23T08:05:16.675+00:00", "monotonic_s": 689859.25, "kind": "TX", "req_id": 439689269, "command": "GET CAL", "hex": "47 45 54 2C 34 33 39 36 38 39 32 36 39 2C 43 41 4C 0A", "ascii": "b'GET,439689269,CAL\\n'", "written": 18}
+{"wall_utc": "2026-11-23T08:05:16.691+00:00", "monotonic_s": 689859.265, "kind": "RX", "hex": "43", "ascii": "b'C'", "parsed": []}
+{"wall_utc": "2026-11-23T08:05:16.691+00:00", "monotonic_s": 689859.265, "kind": "RX", "hex": "41 4C 2C 34 33 39 36 38 39 32 36 39 2C 30 2C 30 2C 2D 31 2C 39", "ascii": "b'AL,439689269,0,0,-1,9'", "parsed": []}
+{"wall_utc": "2026-11-23T08:05:16.695+00:00", "monotonic_s": 689859.265, "kind": "RX", "hex": "30", "ascii": "b'0'", "parsed": []}
+{"wall_utc": "2026-11-23T08:05:16.695+00:00", "monotonic_s": 689859.265, "kind": "RX", "hex": "30 30 30 2C 4E 41 2C 31 32 35 30 30 30 2C 39 30 30 30 30 2C 30 2C 31 38 30 30 30 30 2C 4E 41", "ascii": "b'000,NA,125000,90000,0,180000,NA'", "parsed": []}
+{"wall_utc": "2026-11-23T08:05:16.697+00:00", "monotonic_s": 689859.265, "kind": "RX", "hex": "2C", "ascii": "b','", "parsed": []}
+{"wall_utc": "2026-11-23T08:05:16.697+00:00", "monotonic_s": 689859.265, "kind": "RX", "hex": "4E 41 2C 34 30 30 30 0A", "ascii": "b'NA,4000\\n'", "parsed": ["CalFrame"]}
+{"wall_utc": "2026-11-23T08:05:17.065+00:00", "monotonic_s": 689859.64, "kind": "TX", "req_id": 439689270, "command": "GET STATE", "hex": "47 45 54 2C 34 33 39 36 38 39 32 37 30 2C 53 54 41 54 45 0A", "ascii": "b'GET,439689270,STATE\\n'", "written": 20}
+{"wall_utc": "2026-11-23T08:05:17.080+00:00", "monotonic_s": 689859.656, "kind": "RX", "hex": "53", "ascii": "b'S'", "parsed": []}
+{"wall_utc": "2026-11-23T08:05:17.080+00:00", "monotonic_s": 689859.656, "kind": "RX", "hex": "54 41 54 45 2C 31 35 30 35 34 33 2C 4D 41", "ascii": "b'TATE,150543,MA'", "parsed": []}
+{"wall_utc": "2026-11-23T08:05:17.084+00:00", "monotonic_s": 689859.656, "kind": "RX", "hex": "4E", "ascii": "b'N'", "parsed": []}
+{"wall_utc": "2026-11-23T08:05:17.084+00:00", "monotonic_s": 689859.656, "kind": "RX", "hex": "55 41 4C 2C 55 4E 4B 4E 4F 57 4E 2C 49 44 4C 45 2C 31 2C 30 2C 39 30 34 30 30 2C 39 30 30 30", "ascii": "b'UAL,UNKNOWN,IDLE,1,0,90400,9000'", "parsed": []}
+{"wall_utc": "2026-11-23T08:05:17.087+00:00", "monotonic_s": 689859.656, "kind": "RX", "hex": "30", "ascii": "b'0'", "parsed": []}
+{"wall_utc": "2026-11-23T08:05:17.087+00:00", "monotonic_s": 689859.656, "kind": "RX", "hex": "2C 31 32 31 34 32 2C 30 2C 30 2C 31 2C 31 32 35 30 30 30 2C 41 4E 47 4C 45 5F 43 4D 44 2C 38", "ascii": "b',12142,0,0,1,125000,ANGLE_CMD,8'", "parsed": []}
+{"wall_utc": "2026-11-23T08:05:17.090+00:00", "monotonic_s": 689859.671, "kind": "RX", "hex": "34", "ascii": "b'4'", "parsed": []}
+{"wall_utc": "2026-11-23T08:05:17.090+00:00", "monotonic_s": 689859.671, "kind": "RX", "hex": "31 33 38 34 38 38 34 2C 4C 49 4E 4B 5F 4C 4F 53 54 2C 34 33 39 36 38 39 32 37 30 0A", "ascii": "b'1384884,LINK_LOST,439689270\\n'", "parsed": ["StateFrame"]}
+{"wall_utc": "2026-11-23T08:05:17.469+00:00", "monotonic_s": 689860.046, "kind": "TX", "req_id": 439689271, "command": "PING", "hex": "50 49 4E 47 2C 34 33 39 36 38 39 32 37 31 0A", "ascii": "b'PING,439689271\\n'", "written": 15}
+{"wall_utc": "2026-11-23T08:05:17.485+00:00", "monotonic_s": 689860.062, "kind": "RX", "hex": "50", "ascii": "b'P'", "parsed": []}
+{"wall_utc": "2026-11-23T08:05:17.485+00:00", "monotonic_s": 689860.062, "kind": "RX", "hex": "4F 4E 47 2C 34 33 39 36 38 39 32 37 31 2C 31 35 30 39 34 37 0A", "ascii": "b'ONG,439689271,150947\\n'", "parsed": ["PongFrame"]}
+{"wall_utc": "2026-11-23T08:05:18.416+00:00", "monotonic_s": 689860.984, "kind": "end", "rx_bytes": 265, "parsed_frames": ["InfoFrame", "CalFrame", "StateFrame", "PongFrame"]}
